@@ -1,22 +1,8 @@
 "use client";
-import React, { useState, useEffect, useContext, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Typography, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, TextField, Snackbar, Alert, ToggleButtonGroup, ToggleButton, SelectChangeEvent, FormControl, InputLabel, Select, MenuItem } from "@mui/material";
 import { useEditorContext } from "@/contexts/EditorContext";
 import axios from 'axios';
-import { useTheme, createTheme, styled, alpha } from '@mui/material/styles';
-import { EditorProvider, EditorContext } from '@/contexts/EditorContext';
-import Header from '@/components/Header';
-import AppDrawer from '@/components/Drawer';
-import EditorPane from '@/components/EditorPane';
-import LoginDialog from '@/components/LoginDialog';
-import BranchSelector from '@/components/BranchSelector';
-import FileViewer from '@/components/FileViewer';
-import CssBaseline from '@mui/material/CssBaseline';
-import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import TrendingFlatIcon from '@mui/icons-material/TrendingFlat';
-
-// Import AceEditor and necessary modes/themes
 import AceEditor from "react-ace";
 import ace from "ace-builds";
 import "ace-builds/src-noconflict/mode-tcl";
@@ -26,7 +12,6 @@ import "ace-builds/src-noconflict/mode-text";
 import "ace-builds/src-noconflict/mode-python";
 import "ace-builds/src-noconflict/theme-tomorrow_night";
 import "ace-builds/src-noconflict/ext-language_tools";
-// Import the search box extension
 import "ace-builds/src-noconflict/ext-searchbox";
 
 // Configure Ace paths (assuming files are copied to /public/ace/)
@@ -131,16 +116,6 @@ export default function Home() {
   };
 
   // Button click handlers 
-  const handleNew = () => {
-    // Logic for creating a new file
-    console.log("New file action");
-    // You might want to clear the editor, update state, etc.
-    updateCurrentFileContentDirectly(null);
-    setLocalCode("");
-    setVersionBumpType('patch');
-    setEditorKey(prev => prev + 1); // Remount editor for a fresh state
-  };
-
   const handleSave = () => {
     handleOpenSaveModal();
   };
@@ -247,9 +222,15 @@ export default function Home() {
          throw new Error(response.data.error || 'Save failed.');
       }
 
-    } catch (err: any) {
-        console.error("Save error:", err);
-        setSaveSnackbar({open: true, message: `Save failed: ${err.response?.data?.error || err.message || 'Unknown error'}`, severity: "error"});
+    } catch (err: unknown) {
+        // Attempt to extract a meaningful error message
+        let errorMessage = "An unknown error occurred during save.";
+        if (axios.isAxiosError(err)) {
+            errorMessage = err.response?.data?.error || err.response?.data?.message || err.message;
+        } else if (err instanceof Error) {
+            errorMessage = err.message;
+        }
+        setSaveSnackbar({open: true, message: `Save failed: ${errorMessage}`, severity: "error"});
         checkBackendHealth();
     } finally {
         setIsSaving(false);
@@ -293,25 +274,31 @@ export default function Home() {
     setDiffResult(null);
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/diff-file`, {
-        path: currentFilePath,
-        baseBranch: selectedBranch,      
-        compareBranch: compareToBranch, 
-        baseContent: localCode,           
+      const response = await axios.post(`${API_BASE_URL}/get-diff`, {
+        filePath: currentFilePath,
+        baseBranch: selectedBranch,
+        targetBranch: compareToBranch,
+        username: selectedUser,
+        password: password,
       });
 
-      if (response.data && typeof response.data.diff === 'string') {
-        setDiffTargetBranch(compareToBranch); // Keep track of what was compared against
+      if (response.status === 200 && response.data.diff) {
         setDiffResult(response.data.diff);
-        setDiffResultModalOpen(true);
+        setDiffResultModalOpen(true); // Open the result modal
       } else {
-        throw new Error('Invalid response format from diff endpoint');
+        throw new Error(response.data.error || 'Failed to get diff.');
       }
-    } catch (err: any) {
-      console.error("Diff error:", err);
-      const errorMessage = err.response?.data?.error || err.message || 'Failed to generate diff.';
-      setSaveSnackbar({ open: true, message: `Diff failed: ${errorMessage}`, severity: 'error' });
-      checkBackendHealth();
+
+    } catch (err: unknown) {
+        // Attempt to extract a meaningful error message
+        let errorMessage = "An unknown error occurred while fetching diff.";
+        if (axios.isAxiosError(err)) {
+            errorMessage = err.response?.data?.error || err.response?.data?.message || err.message;
+        } else if (err instanceof Error) {
+            errorMessage = err.message;
+        }
+        setSaveSnackbar({ open: true, message: `Diff failed: ${errorMessage}`, severity: "error" });
+        checkBackendHealth();
     } finally {
       setIsDiffing(false);
     }
@@ -333,125 +320,308 @@ export default function Home() {
     setSaveSnackbar(null);
   };
 
-  const theme = useTheme();
-  const [editorKey, setEditorKey] = useState(0);
+  // Render Logic
+  const renderContent = () => {
+    if (currentFilePath) {
+      return (
+        <Box 
+          sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)' }}
+        >
+          {/* Backend Status Alert - NEW */}
+          {backendStatus === 'offline' && (
+            <Alert 
+              severity="error" 
+              variant="filled" // Use filled variant for high visibility
+              sx={{ 
+                position: 'sticky', // Make it stick to the top
+                top: 0, 
+                zIndex: 1500, // Ensure it's above other elements
+                borderRadius: 0, // Remove border radius for full width appearance
+                mb: 1 // Add some margin below
+              }}
+            >
+              Backend server is unavailable. Please ensure it is running.
+            </Alert>
+          )}
+
+          {/* File Path Label - Adjust Padding */}
+          <Typography 
+            variant="caption" 
+            sx={{ 
+              pl: 1, 
+              pr: 1,
+              pt: 0,    // Decrease top padding
+              pb: 1,    // Increase bottom padding
+              fontStyle: 'italic', 
+              height: '24px' /* Fixed height */ 
+            }}
+          >
+            {currentFilePath || "No file selected"}
+          </Typography>
+
+          {/* Ace Editor Area - Parent needs position: relative (already has it) */}
+          <Box sx={{ position: 'relative', flexGrow: 1, overflow: 'hidden' }}>
+            {/* Editor itself */}
+            <AceEditor
+              mode={editorMode}
+              theme="tomorrow_night"
+              onChange={handleCodeChange}
+              value={localCode}
+              readOnly={isLoadingFile || currentFilePath === null}
+              name="ACE_EDITOR"
+              editorProps={{ $blockScrolling: true }}
+              setOptions={{
+                enableBasicAutocompletion: true,
+                enableLiveAutocompletion: true,
+                enableSnippets: true,
+                showLineNumbers: true,
+                tabSize: 2,
+              }}
+              width="100%"
+              height="calc(100vh - 64px - 48px)" // Adjust height based on Header and potential footer/status bar
+            />
+            {/* Loading Overlay */}
+            {isLoadingFile && (
+              <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2 }}>
+                <CircularProgress />
+              </Box>
+            )}
+             {/* Error Display (could be an overlay or separate Box) */}
+             {fileLoadError && (
+                 <Box sx={{ p: 1, background: 'error.main', color: 'error.contrastText' }}>
+                     <Typography variant="body2">Error: {fileLoadError}</Typography>
+                 </Box>
+             )}
+
+            {/* Action Buttons (Moved Back & Positioned Absolutely) */}
+            <Box sx={{
+              position: 'absolute',
+              bottom: theme => theme.spacing(2), // Position from bottom
+              right: theme => theme.spacing(2), // Position from right
+              zIndex: 10, // Ensure it's above editor content
+              display: 'flex', 
+              gap: 1,
+              // Optional: Add slight background for contrast
+              // backgroundColor: theme => alpha(theme.palette.background.paper, 0.7),
+              // padding: theme => theme.spacing(1),
+              // borderRadius: theme => theme.shape.borderRadius,
+            }}>
+              <Button 
+                variant="outlined" 
+                color="secondary" 
+                onClick={handleOpenCancelModal}
+                disabled={isLoadingFile || !currentFilePath || !fileHasChanged}
+              >
+                Cancel
+              </Button>
+              {/* Diff Button Moved Here */}
+               <Button 
+                variant="outlined" 
+                color="info"
+                onClick={handleDiff}
+                disabled={isLoadingFile || !currentFilePath || !selectedBranch}
+              >
+                Diff
+              </Button>
+              <Button 
+                variant="contained" 
+                color="primary" 
+                onClick={handleSave} 
+                disabled={isLoadingFile || !currentFilePath || isSaving || !fileHasChanged}
+              >
+                {isSaving ? <CircularProgress size={24} color="inherit" /> : "Save"}
+              </Button>
+            </Box>
+          </Box>
+
+          {/* Confirmation Dialog */}
+          <Dialog
+            open={isCancelModalOpen}
+            onClose={handleCloseCancelModal}
+            aria-labelledby="alert-dialog-title"
+            aria-describedby="alert-dialog-description"
+          >
+            <DialogTitle id="alert-dialog-title">
+              {"Discard Changes?"}
+            </DialogTitle>
+            <DialogContent>
+              <DialogContentText id="alert-dialog-description">
+                Are you sure you&apos;d like to discard your changes? The current editor content will be reloaded from the repository.
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={handleCloseCancelModal}>No</Button>
+              <Button onClick={handleConfirmCancel} autoFocus> 
+                Yes
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          {/* Save Confirmation Dialog - Add ToggleButtonGroup */}
+          <Dialog 
+            open={isSaveModalOpen} 
+            onClose={handleCloseSaveModal}
+            sx={{ '& .MuiDialog-paper': { minWidth: '600px' } }} 
+          >
+            <DialogTitle>Save File & Create Version Tag</DialogTitle>
+            <DialogContent>
+              <DialogContentText sx={{ mb: 1 }}> 
+                Committing to: <strong>{selectedBranch || 'N/A'}</strong>
+              </DialogContentText>
+              
+              <TextField
+                autoFocus
+                margin="dense"
+                id="commit-message"
+                label="Commit Message (optional)"
+                placeholder="Enter commit message..."
+                fullWidth
+                variant="outlined"
+                value={commitMessage}
+                onChange={handleCommitMessageChange}
+                multiline
+                rows={4}
+              />
+              
+              {/* Version Bump Selection - Conditional Rendering */}
+              {selectedUser === 'admin' && (
+                <Box sx={{ mt: 2, mb: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <Typography variant="overline" gutterBottom>
+                    Version Bump Type
+                  </Typography>
+                  <ToggleButtonGroup
+                    value={versionBumpType}
+                    exclusive
+                    onChange={handleVersionBumpChange}
+                    aria-label="version bump type"
+                    size="small"
+                  >
+                    <ToggleButton value="patch" aria-label="patch version">
+                      Patch
+                    </ToggleButton>
+                    <ToggleButton value="minor" aria-label="minor version">
+                      Minor
+                    </ToggleButton>
+                    <ToggleButton value="major" aria-label="major version">
+                      Major
+                    </ToggleButton>
+                  </ToggleButtonGroup>
+                </Box>
+              )}
+
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={handleCloseSaveModal}>Cancel</Button>
+              <Button onClick={handleConfirmSave} disabled={!selectedBranch || selectedBranch === 'main' || isSaving}>Submit</Button> 
+            </DialogActions>
+          </Dialog>
+
+          {/* Diff Modal */}
+          <Dialog
+            open={isDiffModalOpen}
+            onClose={handleCloseDiffModal}
+            aria-labelledby="diff-dialog-title"
+            maxWidth="xs" 
+            fullWidth
+          >
+            <DialogTitle id="diff-dialog-title">Compare with Branch</DialogTitle>
+            <DialogContent>
+              <DialogContentText sx={{ mb: 2 }}>
+                Select a branch to compare the current changes in{' '}
+                <strong>{currentFilePath ? currentFilePath.split('/').pop() : 'this file'}</strong>{' '}
+                against.
+              </DialogContentText>
+              <FormControl fullWidth required margin="dense">
+                <InputLabel id="diff-branch-select-label">Branch to Compare</InputLabel>
+                <Select
+                  labelId="diff-branch-select-label"
+                  id="diff-branch-select"
+                  value={diffTargetBranch}
+                  label="Branch to Compare"
+                  onChange={handleDiffTargetBranchChange}
+                  disabled={isDiffing}
+                >
+                  {branches
+                    .map((branch) => (
+                      <MenuItem key={branch.name} value={branch.name}>
+                        {branch.name}
+                      </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={handleCloseDiffModal} disabled={isDiffing}>Cancel</Button>
+              <Button 
+                onClick={() => performDiff(diffTargetBranch)}
+                variant="contained" 
+                disabled={!diffTargetBranch || isDiffing} 
+              >
+                {isDiffing ? <CircularProgress size={24} /> : "Compare"}
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          {/* Diff Result Modal */}
+          <Dialog open={isDiffResultModalOpen} onClose={handleCloseDiffResultModal} fullWidth maxWidth="lg">
+            <DialogTitle>Diff Result for {currentFilePath}</DialogTitle>
+            <DialogContent>
+              {isDiffing ? (
+                  <CircularProgress />
+              ) : diffResult ? (
+                  <AceEditor
+                      mode="diff" // Use diff mode
+                      theme="github" // A light theme might be better for diffs
+                      value={diffResult}
+                      readOnly={true}
+                      name="DIFF_VIEWER"
+                      editorProps={{ $blockScrolling: true }}
+                      width="100%"
+                      height="60vh"
+                      setOptions={{
+                          showLineNumbers: true,
+                          useWorker: false // Diff mode often doesn't need a worker
+                      }}
+                  />
+              ) : (
+                  <DialogContentText>No differences found or unable to compute diff.</DialogContentText>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={handleCloseDiffResultModal}>Close</Button>
+            </DialogActions>
+          </Dialog>
+
+          {/* Save Feedback Snackbar */}
+          {saveSnackbar && (
+              <Snackbar
+                  open={saveSnackbar.open}
+                  autoHideDuration={6000}
+                  onClose={handleCloseSnackbar}
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+              >
+                  <Alert onClose={handleCloseSnackbar} severity={saveSnackbar.severity} sx={{ width: '100%' }}>
+                      {saveSnackbar.message}
+                  </Alert>
+              </Snackbar>
+          )}
+
+        </Box>
+      );
+    }
+    return <Typography sx={{ p: 2, color: 'text.secondary' }}>Please select a file or create a new one.</Typography>;
+  };
 
   return (
-    <Box 
-      sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)' }}
-    >
-      {/* Backend Status Alert - NEW */}
-      {backendStatus === 'offline' && (
-        <Alert 
-          severity="error" 
-          variant="filled" // Use filled variant for high visibility
-          sx={{ 
-            position: 'sticky', // Make it stick to the top
-            top: 0, 
-            zIndex: 1500, // Ensure it's above other elements
-            borderRadius: 0, // Remove border radius for full width appearance
-            mb: 1 // Add some margin below
-          }}
-        >
-          Backend server is unavailable. Please ensure it is running.
-        </Alert>
-      )}
-
-      {/* File Path Label - Adjust Padding */}
-      <Typography 
-        variant="caption" 
-        sx={{ 
-          pl: 1, 
-          pr: 1,
-          pt: 0,    // Decrease top padding
-          pb: 1,    // Increase bottom padding
-          fontStyle: 'italic', 
-          height: '24px' /* Fixed height */ 
-        }}
-      >
-        {currentFilePath || "No file selected"}
-      </Typography>
-
-      {/* Ace Editor Area - Parent needs position: relative (already has it) */}
-      <Box sx={{ position: 'relative', flexGrow: 1, overflow: 'hidden' }}>
-        {/* Editor itself */}
-        <AceEditor
-          mode={editorMode}
-          theme="tomorrow_night"
-          onChange={handleCodeChange}
-          value={localCode}
-          readOnly={isLoadingFile || currentFilePath === null}
-          name="code-editor"
-          editorProps={{ $blockScrolling: true }}
-          width="100%"
-          height="100%" 
-          fontSize={14}
-          showPrintMargin={true}
-          showGutter={true}
-          highlightActiveLine={true}
-          setOptions={{
-            enableBasicAutocompletion: true,
-            enableLiveAutocompletion: true,
-            enableSnippets: false,
-            showLineNumbers: true,
-            tabSize: 2,
-          }}
-        />
-        {/* Loading Overlay */}
-        {isLoadingFile && (
-          <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2 }}>
-            <CircularProgress />
-          </Box>
-        )}
-         {/* Error Display (could be an overlay or separate Box) */}
-         {fileLoadError && (
-             <Box sx={{ p: 1, background: 'error.main', color: 'error.contrastText' }}>
-                 <Typography variant="body2">Error: {fileLoadError}</Typography>
-             </Box>
-         )}
-
-        {/* Action Buttons (Moved Back & Positioned Absolutely) */}
-        <Box sx={{
-          position: 'absolute',
-          bottom: theme => theme.spacing(2), // Position from bottom
-          right: theme => theme.spacing(2), // Position from right
-          zIndex: 10, // Ensure it's above editor content
-          display: 'flex', 
-          gap: 1,
-          // Optional: Add slight background for contrast
-          // backgroundColor: theme => alpha(theme.palette.background.paper, 0.7),
-          // padding: theme => theme.spacing(1),
-          // borderRadius: theme => theme.shape.borderRadius,
-        }}>
-          <Button 
-            variant="outlined" 
-            color="secondary" 
-            onClick={handleOpenCancelModal}
-            disabled={isLoadingFile || !currentFilePath || !fileHasChanged}
-          >
-            Cancel
-          </Button>
-          {/* Diff Button Moved Here */}
-           <Button 
-            variant="outlined" 
-            color="info"
-            onClick={handleDiff}
-            disabled={isLoadingFile || !currentFilePath || !selectedBranch}
-          >
-            Diff
-          </Button>
-          <Button 
-            variant="contained" 
-            color="primary" 
-            onClick={handleSave} 
-            disabled={isLoadingFile || !currentFilePath || isSaving || !fileHasChanged}
-          >
-            {isSaving ? <CircularProgress size={24} color="inherit" /> : "Save"}
-          </Button>
-        </Box>
+    <Box sx={{ display: 'flex' /* Adjust layout as needed, e.g., add Header/Drawer back if required */ }}>
+      {/* Main Content Area */}
+      <Box component="main" sx={{ flexGrow: 1, p: 3, marginTop: '64px' /* Adjust if Header is present */ }}>
+          {renderContent()}
       </Box>
 
-      {/* Confirmation Dialog */}
+      {/* Modals and Snackbar rendered at the top level, outside the main content flow */}
+
+      {/* Cancel Confirmation Dialog */}
       <Dialog
         open={isCancelModalOpen}
         onClose={handleCloseCancelModal}
@@ -463,74 +633,74 @@ export default function Home() {
         </DialogTitle>
         <DialogContent>
           <DialogContentText id="alert-dialog-description">
-            Are you sure you'd like to discard your changes? The current editor content will be reloaded from the repository.
+             Are you sure you&apos;d like to discard your changes? The current editor content will be reloaded from the repository.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseCancelModal}>No</Button>
-          <Button onClick={handleConfirmCancel} autoFocus> 
+          <Button onClick={handleConfirmCancel} autoFocus>
             Yes
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Save Confirmation Dialog - Add ToggleButtonGroup */}
-      <Dialog 
-        open={isSaveModalOpen} 
+      {/* Save Confirmation Dialog */}
+      <Dialog
+        open={isSaveModalOpen}
         onClose={handleCloseSaveModal}
-        sx={{ '& .MuiDialog-paper': { minWidth: '600px' } }} 
+        sx={{ '& .MuiDialog-paper': { minWidth: '600px' } }}
       >
-        <DialogTitle>Save File & Create Version Tag</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 1 }}> 
-            Committing to: <strong>{selectedBranch || 'N/A'}</strong>
-          </DialogContentText>
-          
-          <TextField
-            autoFocus
-            margin="dense"
-            id="commit-message"
-            label="Commit Message (optional)"
-            placeholder="Enter commit message..."
-            fullWidth
-            variant="outlined"
-            value={commitMessage}
-            onChange={handleCommitMessageChange}
-            multiline
-            rows={4}
-          />
-          
-          {/* Version Bump Selection - Conditional Rendering */}
-          {selectedUser === 'admin' && (
-            <Box sx={{ mt: 2, mb: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <Typography variant="overline" gutterBottom>
-                Version Bump Type
-              </Typography>
-              <ToggleButtonGroup
-                value={versionBumpType}
-                exclusive
-                onChange={handleVersionBumpChange}
-                aria-label="version bump type"
-                size="small"
-              >
-                <ToggleButton value="patch" aria-label="patch version">
-                  Patch
-                </ToggleButton>
-                <ToggleButton value="minor" aria-label="minor version">
-                  Minor
-                </ToggleButton>
-                <ToggleButton value="major" aria-label="major version">
-                  Major
-                </ToggleButton>
-              </ToggleButtonGroup>
-            </Box>
-          )}
+          <DialogTitle>Save File & Create Version Tag</DialogTitle>
+          <DialogContent>
+            <DialogContentText sx={{ mb: 1 }}>
+              Committing to: <strong>{selectedBranch || 'N/A'}</strong>
+            </DialogContentText>
 
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseSaveModal}>Cancel</Button>
-          <Button onClick={handleConfirmSave} disabled={!selectedBranch || selectedBranch === 'main' || isSaving}>Submit</Button> 
-        </DialogActions>
+            <TextField
+              autoFocus
+              margin="dense"
+              id="commit-message"
+              label="Commit Message (optional)"
+              placeholder="Enter commit message..."
+              fullWidth
+              variant="outlined"
+              value={commitMessage}
+              onChange={handleCommitMessageChange}
+              multiline
+              rows={4}
+            />
+
+            {/* Version Bump Selection - Conditional Rendering */}
+            {selectedUser === 'admin' && (
+              <Box sx={{ mt: 2, mb: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                <Typography variant="overline" gutterBottom>
+                  Version Bump Type
+                </Typography>
+                <ToggleButtonGroup
+                  value={versionBumpType}
+                  exclusive
+                  onChange={handleVersionBumpChange}
+                  aria-label="version bump type"
+                  size="small"
+                >
+                  <ToggleButton value="patch" aria-label="patch version">
+                    Patch
+                  </ToggleButton>
+                  <ToggleButton value="minor" aria-label="minor version">
+                    Minor
+                  </ToggleButton>
+                  <ToggleButton value="major" aria-label="major version">
+                    Major
+                  </ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+            )}
+
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleCloseSaveModal}>Cancel</Button>
+            <Button onClick={handleConfirmSave} disabled={!selectedBranch || selectedBranch === 'main' || isSaving}>Submit</Button>
+          </DialogActions>
       </Dialog>
 
       {/* Diff Modal */}
@@ -538,101 +708,91 @@ export default function Home() {
         open={isDiffModalOpen}
         onClose={handleCloseDiffModal}
         aria-labelledby="diff-dialog-title"
-        maxWidth="xs" 
+        maxWidth="xs"
         fullWidth
       >
-        <DialogTitle id="diff-dialog-title">Compare with Branch</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 2 }}>
-            Select a branch to compare the current changes in{' '}
-            <strong>{currentFilePath ? currentFilePath.split('/').pop() : 'this file'}</strong>{' '}
-            against.
-          </DialogContentText>
-          <FormControl fullWidth required margin="dense">
-            <InputLabel id="diff-branch-select-label">Branch to Compare</InputLabel>
-            <Select
-              labelId="diff-branch-select-label"
-              id="diff-branch-select"
-              value={diffTargetBranch}
-              label="Branch to Compare"
-              onChange={handleDiffTargetBranchChange}
-              disabled={isDiffing}
+          <DialogTitle id="diff-dialog-title">Compare with Branch</DialogTitle>
+          <DialogContent>
+            <DialogContentText sx={{ mb: 2 }}>
+              Select a branch to compare the current changes in{' '}
+              <strong>{currentFilePath ? currentFilePath.split('/').pop() : 'this file'}</strong>{' '}
+              against.
+            </DialogContentText>
+            <FormControl fullWidth required margin="dense">
+              <InputLabel id="diff-branch-select-label">Branch to Compare</InputLabel>
+              <Select
+                labelId="diff-branch-select-label"
+                id="diff-branch-select"
+                value={diffTargetBranch}
+                label="Branch to Compare"
+                onChange={handleDiffTargetBranchChange}
+                disabled={isDiffing}
+              >
+                {branches
+                  .map((branch) => (
+                    <MenuItem key={branch.name} value={branch.name}>
+                      {branch.name}
+                    </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleCloseDiffModal} disabled={isDiffing}>Cancel</Button>
+            <Button
+              onClick={() => performDiff(diffTargetBranch)}
+              variant="contained"
+              disabled={!diffTargetBranch || isDiffing}
             >
-              {branches
-                .map((branch) => (
-                  <MenuItem key={branch.name} value={branch.name}>
-                    {branch.name}
-                  </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseDiffModal} disabled={isDiffing}>Cancel</Button>
-          <Button 
-            onClick={handleConfirmDiff} 
-            variant="contained" 
-            disabled={!diffTargetBranch || isDiffing} 
-          >
-            {isDiffing ? <CircularProgress size={24} /> : "Compare"}
-          </Button>
-        </DialogActions>
+              {isDiffing ? <CircularProgress size={24} /> : "Compare"}
+            </Button>
+          </DialogActions>
       </Dialog>
 
-      {/* Diff Result Modal (Updated Title Logic) */}
-      <Dialog
-        open={isDiffResultModalOpen}
-        onClose={handleCloseDiffResultModal}
-        aria-labelledby="diff-result-dialog-title"
-        fullWidth
-        maxWidth="lg"
-      >
-        <DialogTitle id="diff-result-dialog-title">
-          {/* Update Title Check */} 
-          {selectedBranch === diffTargetBranch
-            ? `Diff: Unsaved Changes in ${currentFilePath?.split('/').pop()} (Branch: ${selectedBranch})`
-            : `Diff: ${currentFilePath?.split('/').pop()} (Local vs ${diffTargetBranch})`
-          }
-        </DialogTitle>
-        <DialogContent dividers> 
-          {/* Display Diff Content - Using <pre> for simple formatting */} 
-          <Box 
-            component="pre" 
-            sx={{ 
-                whiteSpace: 'pre-wrap', // Allow wrapping
-                wordBreak: 'break-all', // Break long lines
-                fontFamily: 'monospace', 
-                fontSize: '0.875rem',
-                bgcolor: 'background.paper', // Match theme background
-                p: 1, // Add padding
-                maxHeight: '70vh', // Limit height and allow scrolling
-                overflow: 'auto', 
-            }}
-          >
-            {diffResult || 'Loading diff...'} 
-          </Box>
+      {/* Diff Result Modal */}
+      <Dialog open={isDiffResultModalOpen} onClose={handleCloseDiffResultModal} fullWidth maxWidth="lg">
+        <DialogTitle>Diff Result for {currentFilePath}</DialogTitle>
+        <DialogContent>
+          {isDiffing ? (
+              <CircularProgress />
+          ) : diffResult ? (
+              <AceEditor
+                  mode="diff" // Use diff mode
+                  theme="github" // A light theme might be better for diffs
+                  value={diffResult}
+                  readOnly={true}
+                  name="DIFF_VIEWER"
+                  editorProps={{ $blockScrolling: true }}
+                  width="100%"
+                  height="60vh"
+                  setOptions={{
+                      showLineNumbers: true,
+                      useWorker: false // Diff mode often doesn't need a worker
+                  }}
+              />
+          ) : (
+              <DialogContentText>No differences found or unable to compute diff.</DialogContentText>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseDiffResultModal}>Close</Button>
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar for Save Status (and now Diff errors) */}
-      <Snackbar 
-        open={saveSnackbar?.open || false} 
-        autoHideDuration={6000} 
-        onClose={handleCloseSnackbar}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert 
-            onClose={handleCloseSnackbar} 
-            severity={saveSnackbar?.severity || 'info'} 
-            sx={{ width: '100%' }}
-        >
-          {saveSnackbar?.message}
-        </Alert>
-      </Snackbar>
 
+      {/* Save Feedback Snackbar */}
+      {saveSnackbar && (
+          <Snackbar
+              open={saveSnackbar.open}
+              autoHideDuration={6000}
+              onClose={handleCloseSnackbar}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+          >
+              <Alert onClose={handleCloseSnackbar} severity={saveSnackbar.severity} sx={{ width: '100%' }}>
+                  {saveSnackbar.message}
+              </Alert>
+          </Snackbar>
+      )}
     </Box>
   );
 }

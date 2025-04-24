@@ -24,7 +24,7 @@ export async function GET() {
     const result = await query(queryText);
 
     // Ensure branch_permissions is always an array (it should be due to db default)
-    const users: UserDetails[] = result.rows.map((user: { username: string, branch_permissions: any, active: boolean }) => ({
+    const users: UserDetails[] = result.rows.map((user: { username: string, branch_permissions: string[] | null, active: boolean }) => ({
         ...user,
         branch_permissions: Array.isArray(user.branch_permissions) ? user.branch_permissions : [],
     }));
