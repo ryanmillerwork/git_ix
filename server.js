@@ -1,15 +1,6 @@
 // server.js
 require('dotenv').config();
 const express = require('express');
-//debug
-// monkey-patch each HTTP method to log the path before registering it
-;['get','post','put','delete','patch','use','all'].forEach(method => {
-  const orig = app[method].bind(app);
-  app[method] = (path, ...handlers) => {
-    console.log(`> registering route: [${method.toUpperCase()}]`, path);
-    return orig(path, ...handlers);
-  };
-});
 const next    = require('next');
 const cors = require('cors');
 const axios = require('axios');
@@ -23,6 +14,15 @@ const NEXT_APP  = next({ dev });
 const handle    = NEXT_APP.getRequestHandler();
 
 const app = express();
+//debug
+// monkey-patch each HTTP method to log the path before registering it
+;['get','post','put','delete','patch','use','all'].forEach(method => {
+  const orig = app[method].bind(app);
+  app[method] = (path, ...handlers) => {
+    console.log(`> registering route: [${method.toUpperCase()}]`, path);
+    return orig(path, ...handlers);
+  };
+});
 const PORT = process.env.PORT || 3000;
 
 // Increase payload size limit for JSON requests (e.g., for file uploads)
