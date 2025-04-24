@@ -385,7 +385,7 @@ export default function Header() {
     setIsAddingUser(true);
 
     try {
-        const response = await axios.post('/api/new_user', {
+        const response = await axios.post('/api/users/new', {
             username: newUsername,
             email: newUserEmail, // Send email, backend handles if it's null/empty
             password: newUserPassword,
