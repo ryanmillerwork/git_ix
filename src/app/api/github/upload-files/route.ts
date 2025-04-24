@@ -89,14 +89,16 @@ export async function POST(request: Request) {
             const getResp = await axios.get(`${url}?ref=${encodeURIComponent(branch)}`, { headers: githubAuthHeaders }); 
             currentSha = getResp.data.sha;
             console.log(`[API /github/upload-files] File exists, SHA: ${currentSha}. Will overwrite.`);
-        } catch (err: any) {
-            if (err.response?.status !== 404) {
-                 console.error(`[API /github/upload-files] Error checking file ${filePath}:`, err.response?.data || err.message);
-                 // Record error and skip this file
-                 uploadResults.push({ name: file.name, path: filePath, status: 'error', reason: `Failed to check existing file: ${err.response?.data?.message || err.message}` });
-                 continue; 
+        } catch (err: unknown) {
+            if (axios.isAxiosError(err)) {
+                if (err.response?.status !== 404) {
+                     console.error(`[API /github/upload-files] Error checking file ${filePath}:`, err.response?.data || err.message);
+                     // Record error and skip this file
+                     uploadResults.push({ name: file.name, path: filePath, status: 'error', reason: `Failed to check existing file: ${err.response?.data?.message || err.message}` });
+                     continue; 
+                }
+                console.log(`[API /github/upload-files] File does not exist. Will create.`);
             }
-            console.log(`[API /github/upload-files] File does not exist. Will create.`);
         }
 
         // 2. Prepare payload and PUT file
@@ -124,13 +126,22 @@ export async function POST(request: Request) {
                 url: putResp.data?.content?.html_url,
             });
             console.log(`[API /github/upload-files] Upload successful for ${filePath}. Commit SHA: ${lastSuccessfulCommitSha}`);
-        } catch (putError: any) {
-            console.error(`[API /github/upload-files] Error uploading ${filePath}:`, putError.response?.data || putError.message);
+        } catch (putError: unknown) {
+            let message = 'Upload failed';
+            if (axios.isAxiosError(putError)) {
+                console.error(`[API /github/upload-files] Axios Error uploading ${filePath}:`, putError.response?.data || putError.message);
+                message = putError.response?.data?.message || putError.message || message;
+            } else if (putError instanceof Error) {
+                 console.error(`[API /github/upload-files] Error uploading ${filePath}:`, putError.message);
+                 message = putError.message;
+            } else {
+                 console.error(`[API /github/upload-files] Unknown error uploading ${filePath}:`, putError);
+            }
             uploadResults.push({
                 name: file.name,
                 path: filePath,
                 status: 'error',
-                reason: putError.response?.data?.message || putError.message || 'Upload failed',
+                reason: message,
             });
         }
     } // End loop
@@ -157,9 +168,19 @@ export async function POST(request: Request) {
             } else {
                 tagResult.error = 'Could not calculate new tag name.';
             }
-        } catch (tagLookupError: any) {
-            console.error('[API /github/upload-files] Error during tag lookup/calculation:', tagLookupError.message);
-            tagResult.error = 'Error processing existing tags.';
+        } catch (tagErr: unknown) {
+          let message = 'Error processing existing tags.';
+          if (axios.isAxiosError(tagErr)) {
+            const respData = tagErr.response?.data as { message?: string } | undefined;
+            message = respData?.message ?? tagErr.message;
+            console.error(`[API /github/upload-files] AxiosError during tag lookup:`, message);
+          } else if (tagErr instanceof Error) {
+            message = tagErr.message;
+            console.error(`[API /github/upload-files] Error during tag lookup:`, message);
+          } else {
+            console.error(`[API /github/upload-files] Unknown error during tag lookup:`, tagErr);
+          }
+          tagResult.error = message;
         }
     } else {
         console.log('[API /github/upload-files] Skipping tagging as no successful uploads occurred.');
@@ -207,8 +228,18 @@ export async function POST(request: Request) {
         ...(tagResult.error && !tagResult.success && { tagError: tagResult.error }) // Only include error if tag failed
     }, { status: finalStatus });
 
-  } catch (error: any) {
-    console.error('[API /github/upload-files] Unexpected error during upload process:', error.message);
-    return NextResponse.json({ error: 'An unexpected server error occurred during the upload process.' }, { status: 500 });
+  } catch (err: unknown) {
+      let message = 'An unexpected server error occurred during the upload process.';
+      if (err instanceof Error) {
+          message = err.message;
+          console.error('[API /github/upload-files] Unexpected Error:', message);
+      } else if (axios.isAxiosError(err)) {
+           const respData = err.response?.data as { message?: string } | undefined;
+           message = respData?.message ?? err.message;
+           console.error('[API /github/upload-files] Unexpected AxiosError:', message);
+      } else {
+           console.error('[API /github/upload-files] Unexpected unknown error:', err);
+      }
+      return NextResponse.json({ error: message }, { status: 500 });
   }
 }

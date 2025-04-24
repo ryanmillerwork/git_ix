@@ -64,7 +64,7 @@ export async function POST(request: Request) {
   // --- Database Interaction --- 
   try {
     const updates: string[] = [];
-    const queryParams: any[] = [];
+    const queryParams: (string | boolean | string[])[] = [];
     let paramIndex = 1; // Start parameter index at 1
     let messages: string[] = [];
     let isDeleteAction = false;
@@ -130,10 +130,17 @@ export async function POST(request: Request) {
          console.log(`[API /users/update-status] Database operation successful for ${targetUsername}. Rows affected: ${result.rowCount}`);
     }
 
-    return NextResponse.json({ success: true, message: `User '${targetUsername}' successfully ${messages.join(' and ')}.` });
+    return NextResponse.json({ 
+        success: true, 
+        message: `User '${targetUsername}' successfully ${messages.join(' and ')}.` 
+    });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error(`[API /users/update-status] Error processing request for user '${targetUsername}':`, error);
-    return NextResponse.json({ error: 'Database error during user account update.' }, { status: 500 });
+    let message = 'Database error during user account update.';
+    if (error instanceof Error) {
+        message = error.message;
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 } 

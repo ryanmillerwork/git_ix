@@ -98,9 +98,26 @@ export async function POST(request: Request) {
         } else {
             tagResult.error = 'Could not calculate new tag name.';
         }
-    } catch (tagLookupError: any) {
-        console.error('[API /github/revert-branch] Error during tag lookup/calculation:', tagLookupError.message);
-        tagResult.error = 'Error processing existing tags.';
+    } catch (tagErr: unknown) {
+      let message = 'Error processing existing tags.';
+
+      if (axios.isAxiosError(tagErr)) {
+        const respData = tagErr.response?.data as { message?: string } | undefined;
+        message = respData?.message ?? tagErr.message;
+        console.error(
+          `[API /github/revert-branch] AxiosError during tag lookup:`, message
+        );
+      } else if (tagErr instanceof Error) {
+        message = tagErr.message;
+        console.error(
+          `[API /github/revert-branch] Error during tag lookup:`, message
+        );
+      } else {
+        console.error(
+          `[API /github/revert-branch] Unknown error during tag lookup:`, tagErr
+        );
+      }
+      tagResult.error = message;
     }
     // --- End Auto Tagging ---
 
@@ -135,11 +152,33 @@ export async function POST(request: Request) {
         ...(tagResult.error && { tagError: tagResult.error })
     }, { status: finalStatus });
 
-  } catch (error: any) {
-    console.error(`[API /github/revert-branch] Error during revert process for branch '${branchToRevert}':`, error.response?.data || error.message);
-    // Add specific error checks if needed (e.g., 404 for bad SHAs/branch, 422 for bad parents)
-    const status = error.response?.status || 500;
-    const errorMessage = error.response?.data?.message || error.message || `Failed to revert branch '${branchToRevert}'. Check server logs.`;
-    return NextResponse.json({ error: errorMessage }, { status });
+  } catch (err: unknown) {
+      let status = 500;
+      let errorMessage = `Failed to revert branch '${branchToRevert}'. Check server logs.`;
+
+      if (axios.isAxiosError(err)) {
+        status = err.response?.status ?? 500;
+        const respData = err.response?.data as { message?: string } | undefined;
+        errorMessage = respData?.message ?? err.message;
+        console.error(`[API /github/revert-branch] AxiosError during revert: ${status}`, errorMessage);
+
+        if (status === 404) {
+          errorMessage = `Could not find branch '${branchToRevert}' or commit '${commitShaToRevertTo}'.`;
+        } else if (status === 422) {
+          errorMessage = `Revert failed validation (e.g., incorrect commit SHA): ${errorMessage}`;
+        }
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+        console.error(`[API /github/revert-branch] Error during revert:`, errorMessage);
+        // Helpers might throw 404 as Error
+        if (errorMessage.includes('not found')) {
+             status = 404;
+             errorMessage = `Could not find branch '${branchToRevert}' or commit '${commitShaToRevertTo}'.`;
+        }
+      } else {
+        console.error(`[API /github/revert-branch] Unknown error during revert:`, err);
+      }
+
+      return NextResponse.json({ error: errorMessage }, { status });
   }
 } 

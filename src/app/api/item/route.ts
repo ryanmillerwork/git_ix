@@ -169,9 +169,19 @@ export async function DELETE(request: Request) {
         } else {
             tagResult.error = 'Could not calculate new tag name.';
         }
-    } catch (tagLookupError: any) {
-        console.error('[API /item DELETE] Error during tag lookup/calculation:', tagLookupError.message);
-        tagResult.error = 'Error processing existing tags.';
+    } catch (tagErr: unknown) {
+      let message = 'Error processing existing tags.';
+      if (axios.isAxiosError(tagErr)) {
+        const respData = tagErr.response?.data as { message?: string } | undefined;
+        message = respData?.message ?? tagErr.message;
+        console.error(`[API /item DELETE] AxiosError during tag lookup:`, message);
+      } else if (tagErr instanceof Error) {
+        message = tagErr.message;
+        console.error(`[API /item DELETE] Error during tag lookup:`, message);
+      } else {
+        console.error(`[API /item DELETE] Unknown error during tag lookup:`, tagErr);
+      }
+      tagResult.error = message;
     }
     // --- End Auto Tagging ---
 
@@ -200,10 +210,32 @@ export async function DELETE(request: Request) {
         ...(tagResult.error && { tagError: tagResult.error })
     }, { status: finalStatus });
 
-  } catch (error: any) {
-    console.error(`[API /item DELETE] Error deleting path '${path}' on branch '${branch}':`, error);
-    const status = error.response?.status || (error.message?.includes('fetch tree data') ? 404 : 500);
-    const errorMessage = error.response?.data?.message || error.message || 'An unexpected error occurred during deletion.';
-    return NextResponse.json({ error: errorMessage }, { status });
+  } catch (err: unknown) {
+      let status = 500;
+      let errorMessage = 'An unexpected error occurred during deletion.';
+
+      if (axios.isAxiosError(err)) {
+        status = err.response?.status ?? 500;
+        const respData = err.response?.data as { message?: string } | undefined;
+        errorMessage = respData?.message ?? err.message;
+        console.error(`[API /item DELETE] AxiosError deleting path '${path}':`, errorMessage);
+
+        if (status === 404) {
+            errorMessage = `Could not find path '${path}' or intermediate directory to delete.`;
+        } // Add other status checks like 409 if needed
+
+      } else if (err instanceof Error) {
+        errorMessage = err.message;
+        console.error(`[API /item DELETE] Error deleting path '${path}':`, errorMessage);
+        // Check message from helpers like getTree/getBranchHeadSha
+        if (errorMessage.includes('not found')) {
+            status = 404;
+            errorMessage = `Could not find path '${path}' or intermediate directory to delete.`;
+        }
+      } else {
+        console.error(`[API /item DELETE] Unknown error deleting path '${path}':`, err);
+      }
+
+      return NextResponse.json({ error: errorMessage }, { status });
   }
 } 

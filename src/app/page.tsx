@@ -1,10 +1,20 @@
 "use client";
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { Typography, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, TextField, Snackbar, Alert, ToggleButtonGroup, ToggleButton, SelectChangeEvent, FormControl, InputLabel, Select, MenuItem } from "@mui/material";
 import { useEditorContext } from "@/contexts/EditorContext";
 import axios from 'axios';
-import { useTheme } from '@mui/material/styles';
-import { alpha } from '@mui/material/styles';
+import { useTheme, createTheme, styled, alpha } from '@mui/material/styles';
+import { EditorProvider, EditorContext } from '@/contexts/EditorContext';
+import Header from '@/components/Header';
+import AppDrawer from '@/components/Drawer';
+import EditorPane from '@/components/EditorPane';
+import LoginDialog from '@/components/LoginDialog';
+import BranchSelector from '@/components/BranchSelector';
+import FileViewer from '@/components/FileViewer';
+import CssBaseline from '@mui/material/CssBaseline';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import TrendingFlatIcon from '@mui/icons-material/TrendingFlat';
 
 // Import AceEditor and necessary modes/themes
 import AceEditor from "react-ace";
@@ -57,11 +67,6 @@ const getModeForPath = (filePath: string | null): string => {
 
 // Base URL for API calls
 const API_BASE_URL = 'http://qpcs-server:3000';
-
-// Add Icons for ToggleButtons (optional, but nice)
-import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'; // Example for Major
-import ChevronRightIcon from '@mui/icons-material/ChevronRight'; // Example for Minor
-import TrendingFlatIcon from '@mui/icons-material/TrendingFlat'; // Example for Patch
 
 export default function Home() {
   // Get state from context
@@ -126,7 +131,16 @@ export default function Home() {
   };
 
   // Button click handlers 
-  const handleNew = () => console.log("New clicked");
+  const handleNew = () => {
+    // Logic for creating a new file
+    console.log("New file action");
+    // You might want to clear the editor, update state, etc.
+    updateCurrentFileContentDirectly(null);
+    setLocalCode("");
+    setVersionBumpType('patch');
+    setEditorKey(prev => prev + 1); // Remount editor for a fresh state
+  };
+
   const handleSave = () => {
     handleOpenSaveModal();
   };
@@ -320,6 +334,7 @@ export default function Home() {
   };
 
   const theme = useTheme();
+  const [editorKey, setEditorKey] = useState(0);
 
   return (
     <Box 
@@ -408,7 +423,6 @@ export default function Home() {
           // padding: theme => theme.spacing(1),
           // borderRadius: theme => theme.shape.borderRadius,
         }}>
-          {/* <Button variant="outlined" onClick={handleNew} disabled={isLoadingFile}>New</Button> */}
           <Button 
             variant="outlined" 
             color="secondary" 
@@ -500,15 +514,12 @@ export default function Home() {
                 size="small"
               >
                 <ToggleButton value="patch" aria-label="patch version">
-                  {/* <TrendingFlatIcon sx={{ mr: 0.5 }}/> */}
                   Patch
                 </ToggleButton>
                 <ToggleButton value="minor" aria-label="minor version">
-                  {/* <ChevronRightIcon sx={{ mr: 0.5 }}/> */}
                   Minor
                 </ToggleButton>
                 <ToggleButton value="major" aria-label="major version">
-                  {/* <ArrowUpwardIcon sx={{ mr: 0.5 }}/> */}
                   Major
                 </ToggleButton>
               </ToggleButtonGroup>

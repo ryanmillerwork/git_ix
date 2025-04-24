@@ -12,8 +12,12 @@ export async function GET() {
     const timestamp = new Date().toISOString();
     console.log(`[API /health] Responding OK at ${timestamp}`);
     return NextResponse.json({ status: 'ok', timestamp: timestamp });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[API /health] Error:', error);
-    return NextResponse.json({ error: 'Health check failed' }, { status: 500 });
+    let message = 'Health check failed';
+    if (error instanceof Error) {
+      message = error.message;
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

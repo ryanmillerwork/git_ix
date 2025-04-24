@@ -13,13 +13,13 @@ pool.on('connect', () => {
     console.log('[DB] Connected to PostgreSQL pool.');
 });
 
-pool.on('error', (err: any) => {
+pool.on('error', (err: Error) => {
     console.error('[DB] Unexpected error on idle client', err);
     // Consider exiting the process or implementing reconnection logic if needed
 });
 
 // Function to execute a query using the pool
-export const query = async (text: string, params?: any[]) => {
+export const query = async (text: string, params?: (string | number | boolean | null | string[])[]) => {
     const start = Date.now();
     const client = await pool.connect(); // Get client from pool
     try {
@@ -66,7 +66,7 @@ export async function ensureUsersTableExists() {
       `);
       console.log('[DB] users table created successfully.');
     }
-  } catch (err) {
+  } catch (err: unknown) {
     console.error('[DB] Error ensuring users table exists:', err);
     // Depending on the error, you might want to throw it or handle it differently
     throw new Error('Failed to ensure users table exists.');

@@ -20,8 +20,12 @@ export async function GET() {
     console.log(`[API /users] Found ${result.rows.length} active users.`);
     return NextResponse.json(result.rows);
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[API /users] Error fetching active users:', error);
-    return NextResponse.json({ error: 'Failed to retrieve users from database.' }, { status: 500 });
+    let message = 'Failed to retrieve users from database.';
+    if (error instanceof Error) {
+      message = error.message;
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 } 

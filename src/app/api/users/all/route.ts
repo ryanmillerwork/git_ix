@@ -24,7 +24,7 @@ export async function GET() {
     const result = await query(queryText);
 
     // Ensure branch_permissions is always an array (it should be due to db default)
-    const users: UserDetails[] = result.rows.map((user: any) => ({
+    const users: UserDetails[] = result.rows.map((user: { username: string, branch_permissions: any, active: boolean }) => ({
         ...user,
         branch_permissions: Array.isArray(user.branch_permissions) ? user.branch_permissions : [],
     }));
@@ -32,8 +32,12 @@ export async function GET() {
     console.log(`[API /users/all] Found ${users.length} users.`);
     return NextResponse.json(users);
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[API /users/all] Error fetching all users:', error);
-    return NextResponse.json({ error: 'Failed to retrieve all users from database.' }, { status: 500 });
+    let message = 'Failed to retrieve all users from database.';
+    if (error instanceof Error) {
+        message = error.message;
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 } 

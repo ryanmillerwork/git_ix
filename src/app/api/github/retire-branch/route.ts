@@ -80,13 +80,12 @@ export async function POST(request: Request) {
           throw new Error('Could not extract SHA from branch ref response.');
       }
       console.log(`[API /github/retire-branch] Found SHA: ${sourceSha}`);
-    } catch (error: any) {
-      console.error(`[API /github/retire-branch] Error fetching SHA for ${branchToRetire}:`, error.response?.data || error.message);
-      if (error.response?.status === 404) {
+    } catch (error: unknown) {
+      console.error(`[API /github/retire-branch] Error fetching SHA for ${branchToRetire}:`, error);
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
           return NextResponse.json({ error: `Branch '${branchToRetire}' not found.` }, { status: 404 });
       }
-       // Rethrow other errors
-       throw new Error(`Error accessing branch info for '${branchToRetire}'.`);
+      throw new Error(`Error accessing branch info for '${branchToRetire}'.`);
     }
 
     // 2. Create the new retired branch reference
@@ -112,15 +111,26 @@ export async function POST(request: Request) {
         message: `Branch '${branchToRetire}' retired successfully as '${retiredBranchName}'.` 
     });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Handle potential errors during create/delete (e.g., retired branch already exists)
-    console.error(`[API /github/retire-branch] Error retiring branch '${branchToRetire}':`, error.response?.data || error.message);
-    // Attempt to clean up if retired branch was created but original delete failed?
-    // This part can be complex. For now, just return a generic error.
+    let status = 500;
     let errorMessage = `Failed to retire branch '${branchToRetire}'. Please check GitHub manually.`;
-    if (error.response?.data?.message) {
-        errorMessage += ` Details: ${error.response.data.message}`;
+    if (axios.isAxiosError(error)) {
+        const respData = error.response?.data as { message?: string } | undefined;
+        errorMessage = respData?.message ?? error.message;
+        status = error.response?.status ?? 500;
+        console.error(`[API /github/retire-branch] AxiosError retiring branch '${branchToRetire}':`, errorMessage);
+        if (status === 422) { // Often means ref already exists or delete failed validation
+            errorMessage = `Failed to retire branch '${branchToRetire}'. It might already be retired or there was a conflict.`;
+        }
+    } else if (error instanceof Error) {
+        errorMessage = error.message;
+        console.error(`[API /github/retire-branch] Error retiring branch '${branchToRetire}':`, errorMessage);
+    } else {
+        console.error(`[API /github/retire-branch] Unknown error retiring branch '${branchToRetire}':`, error);
     }
-    return NextResponse.json({ error: errorMessage }, { status: error.response?.status || 500 });
+     // Attempt to clean up if retired branch was created but original delete failed?
+    // This part can be complex. For now, just return a generic error.
+    return NextResponse.json({ error: errorMessage }, { status });
   }
 } 

@@ -59,7 +59,7 @@ export async function POST(request: Request) {
              console.warn(`[API /github/diff-file] File ${path} found on ${compareBranch}, but content or encoding is invalid. Treating as empty.`);
              compareContent = '';
         }
-    } catch (fetchError: any) {
+    } catch (fetchError: unknown) {
         if (axios.isAxiosError(fetchError)) {
             if (fetchError.response?.status === 404) {
                 console.warn(`[API /github/diff-file] File ${path} not found on compare branch ${compareBranch}. Assuming empty content.`);

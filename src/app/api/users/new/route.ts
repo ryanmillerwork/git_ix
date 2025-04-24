@@ -60,15 +60,21 @@ export async function POST(request: Request) {
     // Return the newly created user info (excluding password hash)
     return NextResponse.json(result.rows[0], { status: 201 }); // 201 Created
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[API /users/new] Error creating user:', error);
+    let message = 'Failed to create user due to database error.';
+    let status = 500;
     // Check for duplicate username error (unique constraint violation)
-    if (error.code === '23505') { // PostgreSQL unique violation code
-      console.log('[API /users/new] Duplicate username error.');
-      return NextResponse.json({ error: 'Username already exists' }, { status: 409 }); // 409 Conflict
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+        console.log('[API /users/new] Duplicate username error.');
+        message = 'Username already exists';
+        status = 409; // 409 Conflict
+    } else if (error instanceof Error) {
+         message = error.message;
+         console.error('[API /users/new] Database error:', message);
     } else {
-      console.error('[API /users/new] Generic database error.', error);
-      return NextResponse.json({ error: 'Failed to create user due to database error.' }, { status: 500 });
+        console.error('[API /users/new] Generic database error.', error);
     }
+    return NextResponse.json({ error: message }, { status });
   }
 } 

@@ -28,12 +28,22 @@ export async function createTagReference(tagName: string, commitSha: string) {
     await axios.post(createRefUrl, refPayload, { headers: githubAuthHeaders });
     console.log(`[GitHub] Tag ref '${tagName}' created successfully.`);
     return { success: true };
-  } catch (tagError: any) {
-    console.error(`[GitHub] Error creating tag ref '${tagName}':`, tagError.response?.data || tagError.message);
-    if (tagError.response?.status === 422) {
-      return { success: false, error: `Tag '${tagName}' already exists.` };
-    }
-    return { success: false, error: 'Failed to create tag reference on GitHub.' };
+  } catch (err: unknown) {
+    let message = 'Failed to create tag reference on GitHub.';
+    if (axios.isAxiosError(err)) {
+        const respData = err.response?.data as { message?: string } | undefined;
+        message = respData?.message ?? err.message;
+         if (err.response?.status === 422) {
+             message = `Tag '${tagName}' already exists.`;
+         }
+         console.error(`[GitHub] AxiosError creating tag ref '${tagName}':`, message);
+     } else if (err instanceof Error) {
+          message = err.message;
+          console.error(`[GitHub] Error creating tag ref '${tagName}':`, message);
+     } else {
+         console.error(`[GitHub] Unknown error creating tag ref '${tagName}':`, err);
+     }
+    return { success: false, error: message };
   }
 }
 
@@ -49,9 +59,19 @@ export async function getTree(treeSha: string, recursive: boolean = false): Prom
              throw new Error('Invalid tree data format received from GitHub');
          }
          return response.data.tree; // Returns array of children {path, mode, type, sha}
-    } catch (error: any) {
-         console.error(`[GitHub] Error fetching tree ${treeSha}:`, error.response?.data || error.message);
-         throw new Error(`Failed to fetch tree data for SHA: ${treeSha}`);
+    } catch (err: unknown) {
+        let errorMsg = `Failed to fetch tree data for SHA: ${treeSha}`;
+        if (axios.isAxiosError(err)) {
+            const respData = err.response?.data as { message?: string } | undefined;
+            errorMsg = respData?.message ?? err.message;
+            console.error(`[GitHub] AxiosError fetching tree ${treeSha}:`, errorMsg);
+        } else if (err instanceof Error) {
+             errorMsg = err.message;
+             console.error(`[GitHub] Error fetching tree ${treeSha}:`, errorMsg);
+        } else {
+             console.error(`[GitHub] Unknown error fetching tree ${treeSha}:`, err);
+        }
+        throw new Error(errorMsg);
     }
 }
 
@@ -65,9 +85,19 @@ export async function createTree(treeDefinition: any[]): Promise<string> {
         const response = await axios.post(url, { tree: treeDefinition }, { headers: githubAuthHeaders });
         console.log(`[GitHub] New tree created SHA: ${response.data.sha}`);
         return response.data.sha;
-    } catch (error: any) {
-        console.error(`[GitHub] Error creating tree:`, error.response?.data || error.message, "Definition (partial):", JSON.stringify(treeDefinition).substring(0, 200) + "...");
-        throw new Error('Failed to create new tree object on GitHub.');
+    } catch (err: unknown) {
+        let errorMsg = 'Failed to create new tree object on GitHub.';
+        if (axios.isAxiosError(err)) {
+            const respData = err.response?.data as { message?: string } | undefined;
+            errorMsg = respData?.message ?? err.message;
+            console.error(`[GitHub] AxiosError creating tree:`, errorMsg, "Definition (partial):", JSON.stringify(treeDefinition).substring(0, 200) + "...");
+        } else if (err instanceof Error) {
+             errorMsg = err.message;
+             console.error(`[GitHub] Error creating tree:`, errorMsg, "Definition (partial):", JSON.stringify(treeDefinition).substring(0, 200) + "...");
+        } else {
+             console.error(`[GitHub] Unknown error creating tree:`, err, "Definition (partial):", JSON.stringify(treeDefinition).substring(0, 200) + "...");
+        }
+        throw new Error(errorMsg);
     }
 }
 
@@ -85,12 +115,22 @@ export async function getBranchHeadSha(branch: string): Promise<string> {
         const latestCommitSha = branchResponse.data.commit.sha;
         console.log(`[GitHub] Latest commit SHA for ${branch}: ${latestCommitSha}`);
         return latestCommitSha;
-    } catch (error: any) {
-        console.error(`[GitHub] Error fetching branch details for ${branch}:`, error.response?.data || error.message);
-        if (error.response?.status === 404) {
-            throw new Error(`Branch '${branch}' not found.`);
-        }
-        throw new Error(`Failed to fetch branch details for '${branch}'.`);
+    } catch (err: unknown) {
+        let errorMsg = `Failed to fetch branch details for '${branch}'.`;
+        if (axios.isAxiosError(err)) {
+             const respData = err.response?.data as { message?: string } | undefined;
+             errorMsg = respData?.message ?? err.message;
+              if (err.response?.status === 404) {
+                  errorMsg = `Branch '${branch}' not found.`;
+              }
+             console.error(`[GitHub] AxiosError fetching branch details for ${branch}:`, errorMsg);
+         } else if (err instanceof Error) {
+              errorMsg = err.message;
+               console.error(`[GitHub] Error fetching branch details for ${branch}:`, errorMsg);
+         } else {
+              console.error(`[GitHub] Unknown error fetching branch details for ${branch}:`, err);
+         }
+        throw new Error(errorMsg);
     }
 }
 
@@ -108,11 +148,21 @@ export async function getCommitTreeSha(commitSha: string): Promise<string> {
         const rootTreeSha = commitResponse.data.tree.sha;
         console.log(`[GitHub] Root tree SHA for commit ${commitSha}: ${rootTreeSha}`);
         return rootTreeSha;
-    } catch (error: any) {
-        console.error(`[GitHub] Error fetching commit details for ${commitSha}:`, error.response?.data || error.message);
-         if (error.response?.status === 404) {
-            throw new Error(`Commit '${commitSha}' not found.`);
-        }
-        throw new Error(`Failed to fetch commit details for '${commitSha}'.`);
+    } catch (err: unknown) {
+        let errorMsg = `Failed to fetch commit details for '${commitSha}'.`;
+        if (axios.isAxiosError(err)) {
+             const respData = err.response?.data as { message?: string } | undefined;
+             errorMsg = respData?.message ?? err.message;
+              if (err.response?.status === 404) {
+                 errorMsg = `Commit '${commitSha}' not found.`;
+             }
+              console.error(`[GitHub] AxiosError fetching commit details for ${commitSha}:`, errorMsg);
+          } else if (err instanceof Error) {
+               errorMsg = err.message;
+                console.error(`[GitHub] Error fetching commit details for ${commitSha}:`, errorMsg);
+          } else {
+               console.error(`[GitHub] Unknown error fetching commit details for ${commitSha}:`, err);
+          }
+        throw new Error(errorMsg);
     }
 }
