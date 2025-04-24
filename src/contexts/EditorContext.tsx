@@ -112,7 +112,8 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             console.log('[EditorContext] Checking backend health...');
         }
         try {
-            const response = await axios.get(`${API_BASE_URL}/health`, { timeout: 5000 }); 
+            // Use relative path for consistency
+            const response = await axios.get(`/api/health`, { timeout: 5000 }); 
             if (response.status === 200 && response.data?.status === 'ok') {
                 // Check if status is changing from offline to online
                 const wasOffline = backendStatusRef.current === 'offline'; 
