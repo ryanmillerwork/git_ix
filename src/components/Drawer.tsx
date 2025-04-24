@@ -62,6 +62,71 @@ const StyledTreeItem = React.forwardRef(function StyledTreeItem(
   );
 });
 
+// --- Generic API Call Helper ---
+// Place this outside the component definition
+const callApi = async (
+    endpoint: string,
+    body: Record<string, any>, // Use Record<string, any> for flexibility
+    method: 'POST' | 'GET' | 'PUT' | 'DELETE' = 'POST',
+    credentials: { githubToken?: string } | null, // Expecting object with optional token
+    enqueueSnackbar: (message: string, options: { variant: 'success' | 'error' | 'warning' | 'info' }) => void // Snackbar function type
+): Promise<{ success: boolean; data?: any; error?: string }> => {
+
+    // Added check for credentials within the helper
+    if (!credentials?.githubToken) {
+        console.error('API Call Error: Missing GitHub token.');
+        enqueueSnackbar('GitHub token not configured.', { variant: 'error' });
+        return { success: false, error: 'Missing credentials' };
+    }
+
+    try {
+        const response = await fetch(endpoint, {
+            method,
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${credentials.githubToken}`, // Use token
+            },
+            // Only include body for relevant methods
+            body: (method === 'POST' || method === 'PUT') ? JSON.stringify(body) : undefined,
+        });
+
+        // Attempt to parse JSON, handle cases where body might be empty (e.g., 204 No Content)
+        let result: any;
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.indexOf("application/json") !== -1) {
+             if (response.status !== 204) { // Don't parse if No Content
+                result = await response.json();
+             } else {
+                result = { message: 'Operation successful (No Content)' }; // Or some default success object
+             }
+        } else {
+            // Handle non-JSON responses if necessary, e.g., plain text error messages
+            if (!response.ok) {
+                result = { error: `Server returned status ${response.status}` };
+            } else {
+                result = { message: 'Operation successful (Non-JSON response)' }; // Or handle based on status
+            }
+        }
+
+        if (!response.ok) {
+            console.error(`API Error (${response.status}):`, result);
+            // Use error message from response if available, otherwise generic message
+            const errorMessage = result?.error || result?.message || `API request failed (${response.status})`;
+            enqueueSnackbar(errorMessage, { variant: 'error' });
+            return { success: false, error: errorMessage };
+        }
+
+        // Success: return data (which might be empty/message for 204)
+        return { success: true, data: result };
+
+    } catch (error) {
+        console.error('API Call failed:', error);
+        const message = error instanceof Error ? error.message : 'An unknown error occurred during the API call.';
+        enqueueSnackbar(`Network or parsing error: ${message}`, { variant: 'error' });
+        return { success: false, error: message }; // Indicate failure
+    }
+};
+
 export default function FileDrawer() {
   const drawerWidth = 240;
   const { enqueueSnackbar } = useSnackbar();
@@ -258,68 +323,3 @@ export default function FileDrawer() {
     </Drawer>
   );
 }
-
-// --- Generic API Call Helper ---
-// Place this outside the component definition
-const callApi = async (
-    endpoint: string,
-    body: Record<string, any>, // Use Record<string, any> for flexibility
-    method: 'POST' | 'GET' | 'PUT' | 'DELETE' = 'POST',
-    credentials: { githubToken?: string } | null, // Expecting object with optional token
-    enqueueSnackbar: (message: string, options: { variant: 'success' | 'error' | 'warning' | 'info' }) => void // Snackbar function type
-): Promise<{ success: boolean; data?: any; error?: string }> => {
-
-    // Added check for credentials within the helper
-    if (!credentials?.githubToken) {
-        console.error('API Call Error: Missing GitHub token.');
-        enqueueSnackbar('GitHub token not configured.', { variant: 'error' });
-        return { success: false, error: 'Missing credentials' };
-    }
-
-    try {
-        const response = await fetch(endpoint, {
-            method,
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${credentials.githubToken}`, // Use token
-            },
-            // Only include body for relevant methods
-            body: (method === 'POST' || method === 'PUT') ? JSON.stringify(body) : undefined,
-        });
-
-        // Attempt to parse JSON, handle cases where body might be empty (e.g., 204 No Content)
-        let result: any;
-        const contentType = response.headers.get("content-type");
-        if (contentType && contentType.indexOf("application/json") !== -1) {
-             if (response.status !== 204) { // Don't parse if No Content
-                result = await response.json();
-             } else {
-                result = { message: 'Operation successful (No Content)' }; // Or some default success object
-             }
-        } else {
-            // Handle non-JSON responses if necessary, e.g., plain text error messages
-            if (!response.ok) {
-                result = { error: `Server returned status ${response.status}` };
-            } else {
-                result = { message: 'Operation successful (Non-JSON response)' }; // Or handle based on status
-            }
-        }
-
-        if (!response.ok) {
-            console.error(`API Error (${response.status}):`, result);
-            // Use error message from response if available, otherwise generic message
-            const errorMessage = result?.error || result?.message || `API request failed (${response.status})`;
-            enqueueSnackbar(errorMessage, { variant: 'error' });
-            return { success: false, error: errorMessage };
-        }
-
-        // Success: return data (which might be empty/message for 204)
-        return { success: true, data: result };
-
-    } catch (error) {
-        console.error('API Call failed:', error);
-        const message = error instanceof Error ? error.message : 'An unknown error occurred during the API call.';
-        enqueueSnackbar(`Network or parsing error: ${message}`, { variant: 'error' });
-        return { success: false, error: message }; // Indicate failure
-    }
-};
