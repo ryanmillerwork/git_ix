@@ -741,9 +741,8 @@ export default function Header() {
       // setEditedUsersData({}); // Clear edits when refetching (if edits state exists)
       try {
           console.log("Fetching all users data...");
-          // Assuming endpoint returns: { username, branch_permissions, active }
-          // Note: Backend used 'active', frontend uses 'is_active' - align if needed
-          const response = await axios.get<any[]>(`/api/users-all`);
+          // Update path to match the actual API route location
+          const response = await axios.get<any[]>(`/api/users`);
           // Map the response to ensure `id` is set correctly and permissions is an array
            const formattedData = response.data.map(user => ({
                id: user.username, // Use username as id for DataGrid
