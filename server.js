@@ -2199,6 +2199,18 @@ ensureUsersTableExists();
 // ----------------------------------------
 // Start the Server
 // ----------------------------------------
+
+const listEndpoints = (app) =>
+  app._router.stack
+    .filter((r) => r.route && r.route.path)
+    .map((r) => {
+      const methods = Object.keys(r.route.methods).join(',').toUpperCase();
+      return `${methods} ${r.route.path}`;
+    });
+
+console.log('→ Registered Express routes:\n' + listEndpoints(app).join('\n'));
+
+
 NEXT_APP.prepare().then(() => {
   // All unmatched routes (i.e. your React pages) go to Next
   app.all('*', (req, res) => handle(req, res));
