@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { 
     GITHUB_API_BASE, 
     GITHUB_OWNER, 
@@ -8,6 +8,38 @@ import {
 } from '@/lib/server/github'; // Adjust path as needed
 import { validateUser } from '@/lib/server/auth'; // Adjust path as needed
 import { hasInvalidNameChars } from '@/lib/server/utils'; // Adjust path as needed
+
+// Interface for the commit part of the GitHub API response
+// (Ensure this matches or is compatible with the one in add-file)
+interface GitHubCommitResponseCommit {
+  sha: string;
+  node_id: string;
+  url: string;
+  html_url: string;
+  author: { 
+    name?: string; 
+    email?: string; 
+    date?: string; 
+    login?: string; 
+    id?: number;
+  };
+  committer: { 
+    name?: string; 
+    email?: string; 
+    date?: string; 
+    login?: string; 
+    id?: number;
+  };
+  tree: { sha: string; url: string };
+  message: string;
+  parents: { sha: string; url: string; html_url?: string }[];
+  verification?: { 
+    verified: boolean; 
+    reason: string; 
+    signature: string | null; 
+    payload: string | null; 
+  };
+}
 
 export const dynamic = 'force-dynamic'; // Revalidate on every request
 
@@ -58,7 +90,7 @@ export async function POST(request: Request) {
   const gitkeepPath = `${path}/${foldername}/.gitkeep`; 
   const folderCheckPath = `${path}/${foldername}`; // Path to check if folder exists
   const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${gitkeepPath}`;
-  let newCommitData: any = null;
+  let newCommitData: GitHubCommitResponseCommit | null = null;
 
   try {
     // 1. Check if the folder path already exists
@@ -72,7 +104,6 @@ export async function POST(request: Request) {
     } catch (getError: unknown) {
        // Expecting 404 if folder doesn't exist, proceed if so
        // Type guard for AxiosError
-       // @ts-ignore // Temporarily ignore error due to removed import
        if (axios.isAxiosError(getError)) {
            if (getError.response?.status !== 404) {
                console.error(`[API /github/add-folder] Error checking for existing folder ${folderCheckPath}:`, getError.response?.data || getError.message);
@@ -116,7 +147,6 @@ export async function POST(request: Request) {
     let status = 500;
     let errorMessage = 'Failed to create folder on GitHub.';
 
-    // @ts-ignore // Temporarily ignore error due to removed import
     if (axios.isAxiosError(error)) {
         console.error(`[API /github/add-folder] Axios error creating folder '${path}/${foldername}' on branch '${branch}':`, error.response?.data || error.message);
         status = error.response?.status || 500;

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { 
     GITHUB_API_BASE, 
     GITHUB_OWNER, 
@@ -9,6 +9,38 @@ import {
 } from '@/lib/server/github'; // Adjust path as needed
 import { validateUser } from '@/lib/server/auth'; // Adjust path as needed
 import { getLatestSemanticTag, incrementVersion, hasInvalidNameChars } from '@/lib/server/utils'; // Adjust path as needed
+
+// Interface for the commit part of the GitHub API response
+interface GitHubCommitResponseCommit {
+  sha: string;
+  node_id: string;
+  url: string;
+  html_url: string;
+  author: { 
+    name?: string; 
+    email?: string; 
+    date?: string; 
+    login?: string; // Sometimes included
+    id?: number;
+  };
+  committer: { 
+    name?: string; 
+    email?: string; 
+    date?: string; 
+    login?: string; 
+    id?: number;
+  };
+  tree: { sha: string; url: string };
+  message: string;
+  parents: { sha: string; url: string; html_url?: string }[];
+  verification?: { 
+    verified: boolean; 
+    reason: string; 
+    signature: string | null; 
+    payload: string | null; 
+  };
+  // Add other relevant fields if needed
+}
 
 export const dynamic = 'force-dynamic'; // Revalidate on every request
 
@@ -58,7 +90,7 @@ export async function POST(request: Request) {
   // --- GitHub API Interaction ---
   const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${fullPath}`;
   let commitSha: string | null = null;
-  let newCommitData: any = null;
+  let newCommitData: GitHubCommitResponseCommit | null = null;
 
   try {
     // 1. Check if file already exists before attempting PUT
@@ -71,7 +103,6 @@ export async function POST(request: Request) {
     } catch (getError: unknown) {
        // Expecting 404 if file doesn't exist, proceed if so
        // Type guard for AxiosError
-       // @ts-ignore // Temporarily ignore error due to removed import
        if (axios.isAxiosError(getError)) { 
            if (getError.response?.status !== 404) {
                console.error(`[API /github/add-file] Error checking for existing file ${fullPath}:`, getError.response?.data || getError.message);
@@ -158,7 +189,6 @@ export async function POST(request: Request) {
     let status = 500;
     let errorMessage = 'Failed to create file on GitHub.';
 
-    // @ts-ignore // Temporarily ignore error due to removed import
     if (axios.isAxiosError(error)) { 
         console.error(`[API /github/add-file] Axios error creating file '${fullPath}' on branch '${branch}':`, error.response?.data || error.message);
         status = error.response?.status || 500;

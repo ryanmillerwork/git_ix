@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import {
     GITHUB_API_BASE,
     GITHUB_OWNER,
@@ -31,7 +31,6 @@ export async function GET() {
     let status = 500;
     let errorMessage = 'Failed to fetch branches from GitHub.';
 
-    // @ts-ignore // Temporarily ignore error due to removed import
     if (axios.isAxiosError(error)) {
         console.error('[API /github/branches] Axios error fetching branches:', error.response?.data || error.message);
         status = error.response?.status || 500;
