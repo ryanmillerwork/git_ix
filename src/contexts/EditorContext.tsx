@@ -1,0 +1,343 @@
+"use client"; // This context will be used in client components
+
+import React, { createContext, useState, useContext, ReactNode, useCallback, useEffect, useRef } from 'react';
+import axios from 'axios'; // Import axios
+
+// Base URL for API calls
+// Explicitly set based on user confirmation
+const API_BASE_URL = 'http://qpcs-server:3000';
+
+// Re-use Branch interface (or define centrally)
+interface Branch {
+  name: string;
+  commit: { sha: string; url: string; };
+  protected: boolean;
+}
+
+// Type for backend status
+type BackendStatus = 'checking' | 'online' | 'offline';
+
+// Define the shape of the context data
+interface EditorContextType {
+    currentFilePath: string | null;
+    currentFileContent: string | null;
+    selectedFile: string | null;
+    updateSelectedFile: (filePath: string | null) => void;
+    isLoading: boolean;
+    error: string | null;
+    loadFileContent: (filePath: string | null, branchOverride?: string | null) => Promise<void>;
+    selectedBranch: string | null;
+    updateSelectedBranch: (branch: string | null) => void;
+    selectedUser: string | null;
+    password: string;
+    updateSelectedUser: (user: string | null) => void;
+    updatePassword: (password: string) => void;
+    branches: Branch[];
+    updateBranches: (branches: Branch[]) => void;
+    hasUnsavedChanges: boolean;
+    updateHasUnsavedChanges: (value: boolean) => void;
+    updateCurrentFileContentDirectly: (content: string) => void;
+    branchStateCounter: number;
+    incrementBranchStateCounter: () => void;
+    backendStatus: BackendStatus;
+    checkBackendHealth: () => Promise<void>;
+    addRetryAction: (id: string, action: () => Promise<void>) => void;
+}
+
+const EditorContext = createContext<EditorContextType | undefined>(undefined);
+
+export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+    const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+    const [currentFileContent, setCurrentFileContent] = useState<string | null>(null);
+    const [selectedFile, setSelectedFile] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState<boolean>(false);
+    const [error, setError] = useState<string | null>(null);
+    const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
+    const [selectedUser, setSelectedUser] = useState<string | null>(null);
+    const [password, setPassword] = useState<string>("");
+    const [branches, setBranches] = useState<Branch[]>([]);
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+    const [branchStateCounter, setBranchStateCounter] = useState<number>(0);
+    const [backendStatus, setBackendStatus] = useState<BackendStatus>('checking');
+    const [pendingRetryActions, setPendingRetryActions] = useState<({ id: string, action: () => Promise<void> })[]>([]);
+
+    // Ref to track initial mount
+    const isInitialMount = useRef(true);
+
+    // Ref to track the current backend status to avoid stale closures in checkBackendHealth check
+    const backendStatusRef = useRef(backendStatus);
+    useEffect(() => {
+        backendStatusRef.current = backendStatus;
+    }, [backendStatus]);
+
+    // Modified: Accept ID and de-duplicate
+    const addRetryAction = useCallback((id: string, action: () => Promise<void>) => {
+        setPendingRetryActions(prevActions => {
+            // Check if an action with the same ID already exists
+            if (prevActions.some(item => item.id === id)) {
+                console.log(`[EditorContext] Action with ID '${id}' already in retry queue. Skipping.`);
+                return prevActions; // Don't add if duplicate
+            }
+            console.log(`[EditorContext] Adding action with ID '${id}' to retry queue.`);
+            return [...prevActions, { id, action }]; // Add the new action with its ID
+        });
+    }, []);
+
+    // --- Health Check Function --- 
+    const checkBackendHealth = useCallback(async (isRetryAttempt = false) => { // Add flag to differentiate checks
+        // Only log "Checking..." if it's not a background retry triggered by the interval
+        if (!isRetryAttempt) {
+            console.log('[EditorContext] Checking backend health...');
+        }
+        try {
+            const response = await axios.get(`${API_BASE_URL}/health`, { timeout: 5000 }); 
+            if (response.status === 200 && response.data?.status === 'ok') {
+                // Check if status is changing from offline to online
+                const wasOffline = backendStatusRef.current === 'offline'; 
+                
+                // Always update status - use a ref to track previous state for transition detection
+                setBackendStatus('online'); 
+                backendStatusRef.current = 'online'; // Update ref
+
+                if (wasOffline) {
+                    console.log('[EditorContext] Backend came online. Triggering retry actions...');
+                    // Trigger retry actions IMMEDIATELY after setting state to online
+                    // Use a separate effect or trigger mechanism if state update timing is an issue
+                    // For simplicity here, assume state update is fast enough or handle in the effect below.
+                } else if (!isRetryAttempt) {
+                     console.log('[EditorContext] Backend is online.');
+                }
+
+            } else {
+                // Don't throw error here if already offline, just ensure state is offline
+                if (backendStatusRef.current !== 'offline') {
+                     console.error(`[EditorContext] Unexpected health check status: ${response.status}`);
+                     setBackendStatus('offline');
+                     backendStatusRef.current = 'offline';
+                }
+            }
+        } catch (error: any) {
+             // Only log error if not already offline or if it's the first check
+            if (backendStatusRef.current !== 'offline' || !isRetryAttempt) {
+                console.error('[EditorContext] Backend health check failed:', error.message);
+            }
+             if (backendStatusRef.current !== 'offline') {
+                setBackendStatus('offline');
+                backendStatusRef.current = 'offline';
+            }
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // Dependencies managed carefully below
+
+    const loadFileContent = useCallback(async (filePath: string | null, branchOverride?: string | null) => {
+        if (!filePath) {
+            setCurrentFilePath(null);
+            setCurrentFileContent(null);
+            setError(null);
+            return;
+        }
+        
+        // Use override if provided, otherwise use context state
+        const branchToLoad = branchOverride !== undefined ? branchOverride : selectedBranch;
+
+        if (!branchToLoad) {
+            setError("Cannot load file content: No branch selected or provided.");
+            setCurrentFilePath(filePath);
+            setCurrentFileContent(null);
+            return;
+        }
+
+        setIsLoading(true);
+        setError(null);
+        try {
+            const url = `${API_BASE_URL}/file-contents?path=${encodeURIComponent(filePath)}&branch=${encodeURIComponent(branchToLoad)}`;
+            const response = await fetch(url);
+
+            if (!response.ok) {
+                let errorMsg = `HTTP error! status: ${response.status}`;
+                try {
+                    const errorData = await response.json();
+                    if (errorData.error) {
+                        errorMsg += `: ${errorData.error}`;
+                    }
+                } catch (parseError) {
+                    // Ignore if response body is not valid JSON or empty
+                }
+                throw new Error(errorMsg);
+            }
+
+            const data = await response.json();
+            
+            if (data.error) {
+                throw new Error(data.error);
+            }
+
+            const plainTextContent = data.content;
+            setCurrentFilePath(filePath);
+            setCurrentFileContent(plainTextContent);
+
+        } catch (err: any) {
+            const errorMsg = err.message || "Failed to load file content";
+            setError(errorMsg);
+            setCurrentFilePath(filePath); // Keep the path selection visible
+            setCurrentFileContent(null); // Clear content on error
+
+            // Check if backend is offline or if it's a network-like error, then queue for retry
+            const isNetworkError = err.message.includes('Network Error') || err.message.includes('timeout') || err.message.includes('Failed to fetch');
+            if (backendStatusRef.current === 'offline' || isNetworkError) {
+                const retryId = `load-file-${filePath}-${branchToLoad}`; // Generate unique ID
+                console.log(`[EditorContext] Backend offline or network error loading file. Queuing action ${retryId} for retry.`);
+                // Queue the specific loadFileContent call that failed
+                addRetryAction(retryId, () => loadFileContent(filePath, branchToLoad)); 
+            }
+
+            // Still useful to check health to potentially flip status to offline if this error was the first sign
+            checkBackendHealth(); 
+        } finally {
+            setIsLoading(false);
+        }
+    }, [selectedBranch, setIsLoading, setError, setCurrentFilePath, setCurrentFileContent, checkBackendHealth, addRetryAction]); // <-- Added checkBackendHealth and addRetryAction dependencies
+
+    const updateSelectedBranch = useCallback((branch: string | null) => {
+        setSelectedBranch(branch);
+        if (!branch) {
+            setCurrentFilePath(null);
+            setCurrentFileContent(null);
+            setError(null);
+        }
+    }, [setCurrentFilePath, setCurrentFileContent, setError]);
+
+    const updateSelectedUser = useCallback((user: string | null) => {
+        setSelectedUser(user);
+    }, []);
+
+    const updatePassword = useCallback((pass: string) => {
+        setPassword(pass);
+    }, []);
+
+    // Add updater for branches
+    const updateBranches = useCallback((newBranches: Branch[]) => {
+        setBranches(newBranches);
+    }, []);
+
+    // Add updater for unsaved changes status
+    const updateHasUnsavedChanges = useCallback((value: boolean) => {
+        setHasUnsavedChanges(value);
+    }, []);
+
+    // Add function to directly set file content (used after save)
+    const updateCurrentFileContentDirectly = useCallback((content: string) => {
+        setCurrentFileContent(content);
+    }, []);
+
+    // Add updateSelectedFile function
+    const updateSelectedFile = useCallback((filePath: string | null) => {
+        setSelectedFile(filePath);
+        // Optional: Maybe load content automatically when file is selected?
+        // Or perhaps this is handled elsewhere (e.g., in the component using the context)
+        // For now, just update the selected file path.
+    }, []);
+
+    // NEW function to increment counter
+    const incrementBranchStateCounter = useCallback(() => {
+        setBranchStateCounter(prev => prev + 1);
+        console.log("[EditorContext] Incremented branchStateCounter");
+    }, []);
+
+    // --- Initial Health Check on Mount --- 
+    useEffect(() => {
+        checkBackendHealth(false); // Initial check is not a retry attempt
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [checkBackendHealth]); // Run only once on mount based on checkBackendHealth callback
+
+    // --- Periodic Health Check and Retry Logic ---
+    useEffect(() => {
+        let intervalId: NodeJS.Timeout | null = null;
+
+        // Modified: Extract action from object
+        const runPendingActions = async () => {
+             if (backendStatusRef.current === 'online' && pendingRetryActions.length > 0) {
+                 console.log(`[EditorContext] Executing ${pendingRetryActions.length} pending actions.`);
+                 const actionsToRun = [...pendingRetryActions]; 
+                 setPendingRetryActions([]); // Clear the queue 
+
+                 for (const item of actionsToRun) {
+                     try {
+                         console.log(`[EditorContext] Running retry action: ${item.id}`);
+                         await item.action(); // Execute the action property
+                     } catch (error) {
+                         console.error(`[EditorContext] Error executing retry action (${item.id}):`, error);
+                     }
+                 }
+                 console.log("[EditorContext] Finished executing pending actions.");
+             }
+        };
+
+        if (backendStatus === 'offline') {
+             console.log('[EditorContext] Backend offline. Starting periodic health checks...');
+             // Clear any existing interval first
+             if (intervalId) clearInterval(intervalId); 
+             intervalId = setInterval(() => {
+                 // Pass true to indicate this is a background retry check
+                 checkBackendHealth(true); 
+             }, 1000); // Check every 1 second (changed back from 5s)
+        } else if (backendStatus === 'online') {
+             console.log('[EditorContext] Backend online. Stopping periodic health checks.');
+              if (intervalId) {
+                 clearInterval(intervalId);
+                 intervalId = null; 
+              }
+             // Run pending actions now that we are online
+             runPendingActions();
+        }
+
+        // Cleanup function
+        return () => {
+            if (intervalId) {
+                console.log('[EditorContext] Cleaning up health check interval.');
+                clearInterval(intervalId);
+            }
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [backendStatus, checkBackendHealth]); // Dependencies remain the same
+
+    const contextValue: EditorContextType = {
+        currentFilePath,
+        currentFileContent,
+        selectedFile,
+        updateSelectedFile,
+        isLoading,
+        error,
+        loadFileContent,
+        selectedBranch,
+        updateSelectedBranch,
+        selectedUser,
+        password,
+        updateSelectedUser,
+        updatePassword,
+        branches,
+        updateBranches,
+        hasUnsavedChanges,
+        updateHasUnsavedChanges,
+        updateCurrentFileContentDirectly,
+        branchStateCounter,
+        incrementBranchStateCounter,
+        backendStatus,
+        checkBackendHealth,
+        addRetryAction,
+    };
+
+    return (
+        <EditorContext.Provider value={contextValue}>
+            {children}
+        </EditorContext.Provider>
+    );
+};
+
+export const useEditorContext = (): EditorContextType => {
+    const context = useContext(EditorContext);
+    if (context === undefined) {
+        throw new Error('useEditorContext must be used within an EditorProvider');
+    }
+    return context;
+}; 

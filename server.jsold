@@ -1,0 +1,870 @@
+// server.js
+const express = require('express');
+const cors = require('cors');
+const axios = require('axios');
+const { Client } = require('pg');
+require('dotenv').config();
+const bcrypt = require('bcrypt');
+const semver = require('semver'); // Use semver library for robust version handling
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(express.json());
+app.use(cors());           // Allow all origins (for development purposes)
+
+// GitHub repo details
+const GITHUB_OWNER = 'homebase-sheinberg';
+const GITHUB_REPO = 'dserv';
+const GITHUB_API_BASE = 'https://api.github.com';
+
+// Use a GitHub token if provided to increase API rate limits.
+// const GITHUB_USERNAME = process.env.GITHUB_USERNAME;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const githubHeaders = GITHUB_TOKEN ? { 'Authorization': `token ${GITHUB_TOKEN}` } : {};
+
+// --- Helper Functions for Versioning ---
+
+// Finds the latest valid semantic version tag from a list of tag objects
+function getLatestSemanticTag(tags) {
+  if (!Array.isArray(tags)) return null;
+
+  const validTags = tags
+    .map(tag => tag.name)
+    .filter(name => semver.valid(name))
+    .sort(semver.rcompare); // Sorts descending (latest first)
+
+  return validTags.length > 0 ? validTags[0] : null;
+}
+
+// Increments a semantic version string based on the bump type
+function incrementVersion(versionString, bumpType) {
+  if (!semver.valid(versionString)) {
+    console.warn(`[incrementVersion] Invalid version string: ${versionString}, defaulting to 1.0.0`);
+    // Default based on bump type if starting from scratch
+    if (bumpType === 'major') return '1.0.0';
+    if (bumpType === 'minor') return '0.1.0';
+    return '0.0.1'; // Default to patch if invalid input or patch type
+  }
+  // semver.inc automatically handles pre-release etc. if needed, but we'll keep it simple
+  const nextVersion = semver.inc(versionString, bumpType);
+  return nextVersion || versionString; // Fallback to original if inc fails
+}
+
+// Helper to create a lightweight tag reference
+async function createTagReference(tagName, commitSha, auth) {
+  const createRefUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/refs`;
+  const refPayload = {
+    ref: `refs/tags/${tagName}`,
+    sha: commitSha,
+  };
+  console.log(`[createTagReference] Attempting to create tag ref: ${refPayload.ref} pointing to SHA: ${commitSha}`);
+  try {
+    await axios.post(createRefUrl, refPayload, { auth });
+    console.log(`[createTagReference] Tag ref '${tagName}' created successfully.`);
+    return { success: true };
+  } catch (tagError) {
+    console.error(`[createTagReference] Error creating tag ref '${tagName}':`, tagError.response?.data || tagError.message);
+    // Check for specific GitHub errors (e.g., ref already exists)
+    if (tagError.response?.status === 422) {
+      return { success: false, error: `Tag '${tagName}' already exists.` };
+    }
+    return { success: false, error: 'Failed to create tag reference on GitHub.' };
+  }
+}
+
+// ----------------------------------------
+// API endpoints
+// GETs
+// ----------------------------------------
+
+// GET /branches - Returns all branches in the GitHub repo
+app.get('/branches', async (req, res) => {
+  console.log('get branches');
+  try {
+    const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches`;
+    const response = await axios.get(url, { headers: githubHeaders });
+    res.json(response.data);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to fetch branches' });
+  }
+});
+
+// GET /folder-structure - Returns directory structure for a folder (requires branch in query)
+app.get('/folder-structure', async (req, res) => {
+  console.log('get folder-structure');
+
+  const branch = req.query.branch;
+  if (!branch) {
+    return res.status(400).json({ error: 'Missing required query parameter: branch' });
+  }
+
+  try {
+    const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/trees/${branch}?recursive=1`;
+    const response = await axios.get(url, { headers: githubHeaders });
+    const tree = response.data.tree;
+    
+    const folderPath = req.query.path || 'systems/ess';
+    const filteredTree = tree.filter(
+      item => item.path.startsWith(folderPath) && item.path !== folderPath
+    );
+    
+    res.json(filteredTree);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to fetch directory structure' });
+  }
+});
+
+// GET /file-contents - Returns contents of selected file
+app.get('/file-contents', async (req, res) => {
+  console.log('get file-contents');
+  try {
+    // Validate that a branch is provided
+    if (!req.query.branch) {
+      return res.status(400).json({ error: 'Branch is required' });
+    }
+    // Validate that a file path is provided as well
+    if (!req.query.path) {
+      return res.status(400).json({ error: 'File path is required' });
+    }
+    
+    const branch = req.query.branch;
+    const filePath = req.query.path;
+
+    // Construct the GitHub API URL for file contents
+    // GitHub's API endpoint to fetch file contents is:
+    // GET /repos/{owner}/{repo}/contents/{path}?ref={branch}
+    const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${filePath}?ref=${branch}`;
+    console.log('Fetching file from GitHub:', url);
+    
+    const response = await axios.get(url, { headers: githubHeaders });
+    // console.log('GitHub API response for file contents:', response.data);
+
+    // GitHub returns the file content as a base64-encoded string.
+    // Remove any newline characters that GitHub may include.
+    const contentBase64 = response.data.content.replace(/\n/g, '');
+    const buffer = Buffer.from(contentBase64, 'base64');
+    const fileContent = buffer.toString('utf8');
+
+    res.json({ content: fileContent });
+  } catch (error) {
+    console.error('Error retrieving file contents:', error);
+    res.status(500).json({ error: 'Error retrieving file contents' });
+  }
+});
+
+// GET /users - Get all active users
+app.get('/users', async (req, res) => {
+  console.log('get users');
+  try {
+    // SQL query to select all users where active is true
+    const queryText = 'SELECT username FROM users WHERE active = true';
+    const result = await pgClient.query(queryText);
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to retrieve users' });
+  }
+});
+
+// GET /commits - Returns recent commits/tags for a branch (IMPLEMENTED)
+app.get('/commits', async (req, res) => {
+  const branch = req.query.branch;
+  console.log(`[commits] Fetching commits for branch: ${branch}`);
+
+  if (!branch) {
+    return res.status(400).json({ error: 'Missing required query parameter: branch' });
+  }
+
+  const authHeaders = GITHUB_TOKEN ? { 'Authorization': `token ${GITHUB_TOKEN}` } : {};
+  const commitsUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/commits?sha=${encodeURIComponent(branch)}&per_page=10`;
+  const tagsUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/tags`;
+
+  try {
+    // 1. Fetch last 10 commits
+    console.log(`[commits] Fetching from: ${commitsUrl}`);
+    const commitsResponse = await axios.get(commitsUrl, { headers: authHeaders });
+    const commits = commitsResponse.data; // Array of commit objects
+
+    // 2. Fetch all tags
+    console.log(`[commits] Fetching tags from: ${tagsUrl}`);
+    const tagsResponse = await axios.get(tagsUrl, { headers: authHeaders });
+    const tags = tagsResponse.data; // Array of tag objects { name, commit: { sha, url }, ... }
+
+    // 3. Create a map of commit SHA -> tag name (preferring valid semver tags)
+    const commitShaToTagMap = {};
+    for (const tag of tags) {
+        // Prioritize existing entry if it's already a valid semver tag
+        const existingTag = commitShaToTagMap[tag.commit.sha];
+        const isNewTagSemver = semver.valid(tag.name);
+        const isExistingTagSemver = existingTag && semver.valid(existingTag);
+
+        // If new tag is semver and existing isn't, or if new tag is simply newer (semver compare), overwrite.
+        // Or if no existing tag, just add it.
+         if (!existingTag || (isNewTagSemver && !isExistingTagSemver) || (isNewTagSemver && isExistingTagSemver && semver.gt(tag.name, existingTag))) {
+             commitShaToTagMap[tag.commit.sha] = tag.name;
+         } else if (!existingTag && !isNewTagSemver) {
+             // If no tag exists yet and the new one isn't semver, add it as a fallback
+             commitShaToTagMap[tag.commit.sha] = tag.name;
+         }
+    }
+    console.log(`[commits] Built tag map for ${Object.keys(commitShaToTagMap).length} commits.`);
+
+    // 4. Process commits into the desired format
+    const processedCommits = commits.map(commit => {
+      const sha = commit.sha;
+      const commitData = commit.commit;
+      const commitDate = new Date(commitData.committer?.date || commitData.author?.date);
+      const commitMessage = commitData.message;
+
+      // Extract author from message "[author: username]"
+      const authorMatch = commitMessage.match(/\[author:\s*([^\\\]]+)\]/);
+      const extractedAuthor = authorMatch ? authorMatch[1].trim() : (commit.author?.login || 'N/A'); // Fallback to commit author login
+
+      return {
+        id: sha, // Use commit SHA as the unique ID for DataGrid
+        version: commitShaToTagMap[sha] || 'N/A', // Get tag from map or 'N/A'
+        date: commitDate.toLocaleDateString(), // Format date
+        time: commitDate.toLocaleTimeString(), // Format time
+        author: extractedAuthor,
+        message: commitMessage, // Keep full message
+      };
+    });
+    
+    console.log(`[commits] Processed ${processedCommits.length} commits.`);
+    res.json(processedCommits);
+
+  } catch (error) {
+    console.error(`[commits] Error fetching commits/tags for branch '${branch}':`, error.response?.data || error.message);
+    // Provide more specific error messages if possible
+    if (error.response?.status === 404) {
+        res.status(404).json({ error: `Branch '${branch}' not found or repository inaccessible.` });
+    } else if (error.response?.status === 409) {
+         res.status(409).json({ error: `Repository is empty or branch '${branch}' has no commits.` });
+    } else {
+        res.status(500).json({ error: 'Failed to fetch commit history from GitHub.' });
+    }
+  }
+});
+
+// ----------------------------------------
+// API endpoints
+// POSTs
+// ----------------------------------------
+
+// POST /commit-file - Updated for version tagging
+app.post('/commit-file', async (req, res) => {
+  const { username, password, path, message, content, branch, versionBumpType } = req.body;
+
+  // Validate required fields (add versionBumpType)
+  if (!username || !password || !path || !message || !content || !branch || !['major', 'minor', 'patch'].includes(versionBumpType)) {
+    return res.status(400).json({
+      error: 'Missing required fields or invalid versionBumpType (must be major, minor, or patch)',
+    });
+  }
+
+  // Validate user credentials and branch access
+  const validationResult = await validateUser(username, password, branch);
+  if (!validationResult.valid) {
+    return res.status(403).json({ error: validationResult.reason });
+  }
+
+  const auth = {
+    username: process.env.GITHUB_USERNAME,
+    password: process.env.GITHUB_TOKEN,
+  };
+
+  const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`;
+  let commitSha = null; // To store the SHA of the new commit
+  let commitSuccess = false;
+
+  try {
+    // 1. Commit the file changes
+    let currentSha = null;
+    try {
+      const getResp = await axios.get(`${url}?ref=${branch}`, { auth });
+      currentSha = getResp.data.sha;
+    } catch (err) {
+      if (err.response?.status !== 404) throw err;
+    }
+
+    const payload = {
+      message,
+      content,
+      branch,
+      ...(currentSha ? { sha: currentSha } : {}),
+    };
+
+    const commitResponse = await axios.put(url, payload, { auth });
+    commitSha = commitResponse.data.commit.sha; // Get the SHA of the commit we just made
+    commitSuccess = true;
+    console.log(`[commit-file] File commit successful. SHA: ${commitSha}`);
+
+    // 2. Handle Tagging (only if commit succeeded)
+    let newTagName = null;
+    let tagResult = { success: false, error: 'Tagging skipped or failed.' };
+
+    try {
+      // Fetch existing tags
+      const tagsUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/tags`;
+      console.log('[commit-file] Fetching existing tags...');
+      const tagsResponse = await axios.get(tagsUrl, { headers: githubHeaders });
+      const latestTag = getLatestSemanticTag(tagsResponse.data); // Pass array of tag objects {name: '...', ...}
+      console.log(`[commit-file] Latest tag found: ${latestTag || 'None'}`);
+      
+      // Calculate next version
+      newTagName = incrementVersion(latestTag || '0.0.0', versionBumpType);
+      console.log(`[commit-file] Calculated next tag: ${newTagName}`);
+
+      // Create the new tag reference pointing to the commit we just made
+      if (newTagName && commitSha) {
+        tagResult = await createTagReference(newTagName, commitSha, auth);
+      } else {
+        tagResult.error = 'Could not calculate new tag name or missing commit SHA.';
+      }
+    } catch (tagLookupError) {
+      console.error('[commit-file] Error during tag lookup/calculation:', tagLookupError.message);
+      tagResult.error = 'Error processing existing tags.';
+      // Proceed without tagging, but maybe warn the user?
+    }
+
+    // Respond based on commit and tag results
+    if (tagResult.success) {
+        res.json({ success: true, message: `File committed successfully and tagged as ${newTagName}.`, commit: commitResponse.data.commit, tag: newTagName });
+    } else {
+        // Commit succeeded, but tagging failed
+        res.status(207).json({ 
+            success: true, // Commit was successful
+            message: `File committed successfully, but failed to create tag ${newTagName || ''}. Reason: ${tagResult.error}`, 
+            commit: commitResponse.data.commit,
+            tagError: tagResult.error,
+        }); 
+    }
+
+  } catch (error) {
+    console.error('[commit-file] Error during file commit:', error?.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to commit file' });
+  }
+});
+
+// POST /copy-files - copy files from one branch to another
+// requires user/pass/source/target/path(s)
+app.post('/copy-files', async (req, res) => {
+  const { username, password, source_branch, target_branch, paths } = req.body;
+
+  if (!username || !password || !source_branch || !target_branch || !Array.isArray(paths) || paths.length === 0) {
+    return res.status(400).json({
+      error: 'Missing or invalid fields: username, password, source_branch, target_branch, paths (must be non-empty array)',
+    });
+  }
+
+  const validationResult = await validateUser(username, password, target_branch);
+  if (!validationResult.valid) {
+    return res.status(403).json({ error: validationResult.reason });
+  }
+
+  const auth = {
+    username: process.env.GITHUB_USERNAME,
+    password: process.env.GITHUB_TOKEN,
+  };
+
+  const copyResults = [];
+
+  try {
+    for (const filePath of paths) {
+      const getUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${filePath}?ref=${source_branch}`;
+      let content, encoding;
+
+      try {
+        const getResp = await axios.get(getUrl, { auth });
+        content = getResp.data.content;
+        encoding = getResp.data.encoding;
+
+        if (encoding !== 'base64') {
+          copyResults.push({ path: filePath, status: 'skipped', reason: `Unsupported encoding: ${encoding}` });
+          continue;
+        }
+      } catch (err) {
+        copyResults.push({ path: filePath, status: 'skipped', reason: 'File not found in source branch' });
+        continue;
+      }
+
+      // Check if the file exists in the target branch to get its SHA
+      let sha = null;
+      try {
+        const checkResp = await axios.get(`${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${filePath}?ref=${target_branch}`, { auth });
+        sha = checkResp.data.sha;
+      } catch (err) {
+        if (err.response?.status !== 404) throw err;
+      }
+
+      // Prepare the payload to put the file in the target branch
+      const putPayload = {
+        message: `Copy ${filePath} from ${source_branch} to ${target_branch}`,
+        content,
+        branch: target_branch,
+        ...(sha ? { sha } : {}),
+      };
+
+      try {
+        const putUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${filePath}`;
+        const putResp = await axios.put(putUrl, putPayload, { auth });
+        copyResults.push({
+          path: filePath,
+          status: sha ? 'updated' : 'created',
+          url: putResp.data.content.html_url,
+        });
+      } catch (err) {
+        copyResults.push({
+          path: filePath,
+          status: 'error',
+          reason: err?.response?.data?.message || err.message,
+        });
+      }
+    }
+
+    res.json({ success: true, results: copyResults });
+  } catch (error) {
+    console.error('Unexpected error:', error?.response?.data || error.message);
+    res.status(500).json({ error: 'Unexpected server error' });
+  }
+});
+
+// POST /create-branch - Updated to add initial tag
+app.post('/create-branch', async (req, res) => {
+  const { username, password, newBranchName, sourceBranch, message } = req.body;
+
+  // --- Validation --- 
+  if (!username || !password || !newBranchName || !sourceBranch) {
+    return res.status(400).json({
+      error: 'Missing required fields: username, password, newBranchName, sourceBranch',
+    });
+  }
+
+  // Validate user credentials (adapt validation logic as needed)
+  // Option 1: Basic user validation only
+  // const validationResult = await validateUser(username, password); // Assuming validateUser checks only user/pass
+  // Option 2: Validate against source branch permission (similar to /copy-files target branch validation)
+  const validationResult = await validateUser(username, password, sourceBranch); 
+  if (!validationResult.valid) {
+    return res.status(403).json({ error: validationResult.reason });
+  }
+
+  // --- GitHub API Interaction --- 
+  const auth = {
+    username: process.env.GITHUB_USERNAME,
+    password: process.env.GITHUB_TOKEN, // Use PAT for auth
+  };
+
+  try {
+    // 1. Get the SHA of the source branch
+    const branchInfoUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches/${sourceBranch}`;
+    let sourceSha;
+    try {
+      console.log(`[create-branch] Fetching SHA for source branch: ${sourceBranch}`);
+      const branchResponse = await axios.get(branchInfoUrl, { auth });
+      sourceSha = branchResponse.data.commit.sha;
+      console.log(`[create-branch] Found SHA: ${sourceSha}`);
+    } catch (error) {
+      console.error(`[create-branch] Error fetching source branch SHA for ${sourceBranch}:`, error.response?.data || error.message);
+      return res.status(404).json({ error: `Source branch '${sourceBranch}' not found or inaccessible.` });
+    }
+
+    // 2. Create the new branch reference using the Git Refs API
+    // POST /repos/{owner}/{repo}/git/refs
+    // Ref format: refs/heads/new-branch-name
+    const createRefUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/refs`;
+    const refPayload = {
+      ref: `refs/heads/${newBranchName}`,
+      sha: sourceSha,
+    };
+
+    console.log(`[create-branch] Attempting to create ref: ${refPayload.ref} pointing to SHA: ${sourceSha}`);
+    const createResponse = await axios.post(createRefUrl, refPayload, { auth });
+
+    console.log(`[create-branch] Branch '${newBranchName}' created successfully. SHA: ${sourceSha}`);
+    
+    // 3. Create the initial 1.0.0 tag for the new branch
+    const initialTagName = '1.0.0';
+    const tagResult = await createTagReference(initialTagName, sourceSha, auth);
+
+    // Adjust response based on tag result
+    if (tagResult.success) {
+      res.status(201).json({ success: true, message: `Branch '${newBranchName}' created and tagged as ${initialTagName}.`, data: createResponse.data });
+    } else {
+      res.status(207).json({ 
+          success: true, // Branch creation succeeded
+          message: `Branch '${newBranchName}' created, but failed to create initial tag ${initialTagName}. Reason: ${tagResult.error}`, 
+          data: createResponse.data,
+          tagError: tagResult.error,
+      });
+    }
+
+  } catch (error) {
+    console.error(`[create-branch] Error creating branch '${newBranchName}':`, error.response?.data || error.message);
+    // Check for specific GitHub errors (e.g., ref already exists)
+    if (error.response?.status === 422) {
+       return res.status(422).json({ error: `Branch '${newBranchName}' already exists or reference is invalid.` });
+    }
+    res.status(500).json({ error: 'Failed to create branch on GitHub.' });
+  }
+});
+
+// POST /retire-branch - Renames a branch by adding -retired suffix
+app.post('/retire-branch', async (req, res) => {
+  const { username, password, branchToRetire } = req.body;
+
+  // --- Validation --- 
+  if (!username || !password || !branchToRetire) {
+    return res.status(400).json({
+      error: 'Missing required fields: username, password, branchToRetire',
+    });
+  }
+
+  // Prevent retiring the main branch or already retired branches
+  if (branchToRetire === 'main') {
+    return res.status(400).json({ error: 'Cannot retire the main branch.' });
+  }
+  if (branchToRetire.endsWith('-retired')) {
+      return res.status(400).json({ error: `Branch '${branchToRetire}' is already retired.` });
+  }
+
+  // Validate user credentials (Using basic user/pass validation here, adjust if needed)
+  const validationResult = await validateUser(username, password);
+  if (!validationResult.valid) {
+    return res.status(403).json({ error: validationResult.reason });
+  }
+  // Enforce admin-only retirement
+  if (username !== 'admin') { 
+    return res.status(403).json({ error: 'Only admin can retire branches.'});
+  }
+
+  // --- GitHub API Interaction --- 
+  const auth = {
+    username: process.env.GITHUB_USERNAME,
+    password: process.env.GITHUB_TOKEN, // Use PAT for auth
+  };
+  const retiredBranchName = `${branchToRetire}-retired`;
+
+  try {
+    // 1. Get the SHA of the branch to retire
+    const branchInfoUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/refs/heads/${branchToRetire}`;
+    let sourceSha;
+    try {
+      console.log(`[retire-branch] Fetching SHA for branch: ${branchToRetire}`);
+      const branchResponse = await axios.get(branchInfoUrl, { auth });
+      sourceSha = branchResponse.data.object.sha; // Use object.sha for refs
+      console.log(`[retire-branch] Found SHA: ${sourceSha}`);
+    } catch (error) {
+      console.error(`[retire-branch] Error fetching SHA for ${branchToRetire}:`, error.response?.data || error.message);
+      // Handle case where branch might not exist (e.g., race condition)
+      if (error.response?.status === 404) {
+          return res.status(404).json({ error: `Branch '${branchToRetire}' not found.` });
+      }
+      return res.status(500).json({ error: `Error accessing branch '${branchToRetire}'.` });
+    }
+
+    // 2. Create the new retired branch reference
+    const createRefUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/refs`;
+    const createPayload = {
+      ref: `refs/heads/${retiredBranchName}`,
+      sha: sourceSha,
+    };
+    console.log(`[retire-branch] Attempting to create retired ref: ${createPayload.ref}`);
+    await axios.post(createRefUrl, createPayload, { auth });
+    console.log(`[retire-branch] Created retired ref: ${retiredBranchName}`);
+
+    // 3. Delete the original branch reference
+    const deleteRefUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/refs/heads/${branchToRetire}`;
+    console.log(`[retire-branch] Attempting to delete original ref: refs/heads/${branchToRetire}`);
+    await axios.delete(deleteRefUrl, { auth });
+    console.log(`[retire-branch] Deleted original ref: ${branchToRetire}`);
+
+    res.status(200).json({ success: true, message: `Branch '${branchToRetire}' retired successfully as '${retiredBranchName}'.` });
+
+  } catch (error) {
+    // Handle potential errors during create/delete (e.g., retired branch already exists)
+    console.error(`[retire-branch] Error retiring branch '${branchToRetire}':`, error.response?.data || error.message);
+    // Attempt to clean up if retired branch was created but original delete failed?
+    // This part can be complex. For now, just return a generic error.
+    res.status(500).json({ error: `Failed to retire branch '${branchToRetire}'. Please check GitHub manually.` });
+  }
+});
+
+// POST /revert-branch - Resets a branch to a specific commit SHA
+app.post('/revert-branch', async (req, res) => {
+    const { username, password, branchToRevert, commitShaToRevertTo } = req.body;
+
+    // --- Validation ---
+    if (!username || !password || !branchToRevert || !commitShaToRevertTo) {
+        return res.status(400).json({
+            error: 'Missing required fields: username, password, branchToRevert, commitShaToRevertTo',
+        });
+    }
+
+    // Prevent resetting the main branch as a safety measure
+    if (branchToRevert === 'main') {
+        return res.status(400).json({ error: 'Cannot revert the main branch via this method.' });
+    }
+
+    // Validate user credentials and branch access
+    // User needs write access to the branch they are trying to revert
+    const validationResult = await validateUser(username, password, branchToRevert);
+    if (!validationResult.valid) {
+        return res.status(403).json({ error: validationResult.reason });
+    }
+    // Note: The validateUser function already handles admin bypass if implemented correctly.
+    // If non-admin users are allowed to revert, ensure they have appropriate permissions.
+
+    // --- GitHub API Interaction ---
+    const auth = {
+        username: process.env.GITHUB_USERNAME,
+        password: process.env.GITHUB_TOKEN, // Use PAT for auth
+    };
+    const updateRefUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/refs/heads/${branchToRevert}`;
+
+    console.log(`[revert-branch] Attempting to reset branch '${branchToRevert}' to commit SHA '${commitShaToRevertTo}'`);
+
+    try {
+        // Use the PATCH method to update the reference
+        // Force update is required for potentially non-fast-forward changes (like reset)
+        const payload = {
+            sha: commitShaToRevertTo,
+            force: true, // Force the update (equivalent to -f or --force)
+        };
+
+        await axios.patch(updateRefUrl, payload, { auth });
+
+        console.log(`[revert-branch] Branch '${branchToRevert}' successfully reset to SHA '${commitShaToRevertTo}'.`);
+        res.status(200).json({ success: true, message: `Branch '${branchToRevert}' successfully reverted to commit ${commitShaToRevertTo.substring(0, 7)}.` });
+
+    } catch (error) {
+        console.error(`[revert-branch] Error resetting branch '${branchToRevert}':`, error.response?.data || error.message);
+        // Handle potential errors (e.g., branch not found, invalid SHA, permissions)
+        if (error.response?.status === 404) {
+            return res.status(404).json({ error: `Branch '${branchToRevert}' not found or commit SHA '${commitShaToRevertTo}' is invalid.` });
+        }
+         if (error.response?.status === 422) {
+            // This often indicates the SHA doesn't exist or other validation issues
+            return res.status(422).json({ error: `Invalid request. Ensure commit SHA '${commitShaToRevertTo}' exists.` });
+        }
+        res.status(500).json({ error: `Failed to revert branch '${branchToRevert}'. Please check repository status.` });
+    }
+});
+
+// POST /update-account-status - Activate, deactivate, and/or delete a target user account
+// Can only be performed by admin account
+app.post('/update-account-status', async (req, res) => {
+  try {
+    const { adminUsername, adminPassword, targetUsername, active, deleteUser } = req.body;
+
+    // Only allow admin to perform this operation
+    if (adminUsername !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Only admin can update account status.' });
+    }
+
+    // Retrieve the admin account from the database.
+    const adminQuery = 'SELECT * FROM users WHERE username = $1';
+    const adminResult = await pgClient.query(adminQuery, [adminUsername]);
+    if (adminResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Admin account not found.' });
+    }
+    const adminUser = adminResult.rows[0];
+
+    // Validate the admin password using bcrypt.
+    const isAdminPasswordValid = await bcrypt.compare(adminPassword, adminUser.password_hash);
+    if (!isAdminPasswordValid) {
+      return res.status(401).json({ success: false, message: 'Admin password is incorrect.' });
+    }
+
+    // Check if deletion is requested.
+    if (deleteUser === true) {
+      // Delete the target account.
+      const deleteQuery = 'DELETE FROM users WHERE username = $1 RETURNING username';
+      const deleteResult = await pgClient.query(deleteQuery, [targetUsername]);
+      if (deleteResult.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Target account not found.' });
+      }
+      return res.json({ success: true, message: `Account '${targetUsername}' has been deleted.` });
+    } else {
+      // Validate that active is provided and is a boolean.
+      if (typeof active !== 'boolean') {
+        return res.status(400).json({ success: false, message: 'The "active" field must be a boolean when not deleting.' });
+      }
+
+      // Update the target account's active field.
+      const updateQuery = `
+        UPDATE users 
+        SET active = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE username = $1
+        RETURNING username, active, updated_at;
+      `;
+      const updateResult = await pgClient.query(updateQuery, [targetUsername, active]);
+      if (updateResult.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Target account not found.' });
+      }
+
+      return res.json({
+        success: true,
+        message: `Account '${targetUsername}' has been ${active ? 'activated' : 'deactivated'}.`,
+        user: updateResult.rows[0]
+      });
+    }
+  } catch (error) {
+    console.error('Error updating account status:', error);
+    res.status(500).json({ success: false, message: 'Error while updating account status.' });
+  }
+});
+
+
+// ----------------------------------------
+// DB/users interaction helper functions
+// ----------------------------------------
+
+// Check to make sure the users table exists and create it if not
+async function ensureUsersTableExists() {
+  try {
+    // Check if the "users" table exists in the public schema.
+    const result = await pgClient.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'users'
+      ) AS "exists"
+    `);
+
+    if (result.rows[0].exists) {
+      console.log('users table found');
+    } else {
+      // Create the table if it doesn't exist.
+      await pgClient.query(`
+        CREATE TABLE users (
+          id SERIAL PRIMARY KEY,
+          username VARCHAR(255) NOT NULL UNIQUE,
+          email VARCHAR(255),
+          password_hash VARCHAR(255) NOT NULL,
+          branch_permissions TEXT[] NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          last_login TIMESTAMP WITH TIME ZONE,
+          active BOOLEAN DEFAULT FALSE
+        );
+      `);
+      console.log('users table created');
+    }
+  } catch (err) {
+    console.error('Error ensuring users table exists:', err);
+  }
+}
+
+// Create a new user
+app.post('/new_user', async (req, res) => {
+  const { username, email, password, branch_permissions } = req.body;
+
+  // Validate required fields
+  if (!username || !password || !branch_permissions) {
+    return res.status(400).json({ error: 'username, password, and branch_permissions are required' });
+  }
+
+  try {
+    // Hash the password with bcrypt
+    const saltRounds = 10;
+    const password_hash = await bcrypt.hash(password, saltRounds);
+
+    // SQL query to insert the new user into the 'users' table
+    const queryText = `
+      INSERT INTO users (username, email, password_hash, branch_permissions)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id, username, email, branch_permissions, created_at;
+    `;
+    const values = [username, email || null, password_hash, branch_permissions];
+
+    const result = await pgClient.query(queryText, values);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error(error);
+    // Check for duplicate username error (unique constraint violation)
+    if (error.code === '23505') {
+      res.status(409).json({ error: 'Username already exists' });
+    } else {
+      res.status(500).json({ error: 'Failed to create user' });
+    }
+  }
+});
+
+// Validate user credentials and branch permissions
+async function validateUser(username, password, branch) {
+  console.log('validating user')
+  try {
+    // Retrieve the user from the database by username.
+    const queryText = 'SELECT * FROM users WHERE username = $1';
+    const result = await pgClient.query(queryText, [username]);
+
+    // If no user is found, validation fails.
+    if (result.rows.length === 0) {
+      return { valid: false, reason: 'User not found' };
+    }
+
+    const user = result.rows[0];
+
+    // Check if the account is active.
+    if (!user.active) {
+      return { valid: false, reason: 'Account is inactive' };
+    }
+
+    // Validate the password using bcrypt.
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    if (!passwordMatch) {
+      return { valid: false, reason: 'Invalid password' };
+    }
+
+    // Check branch permissions ONLY if user is not admin and a branch is provided
+    if (username !== 'admin' && branch && 
+        (!user.branch_permissions || !user.branch_permissions.includes(branch))) {
+      return { valid: false, reason: 'Branch not permitted' };
+    }
+
+    // Everything checks out; update last_login timestamp.
+    const updateQuery = `
+      UPDATE users 
+      SET last_login = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $1 
+      RETURNING last_login, updated_at
+    `;
+    const updateResult = await pgClient.query(updateQuery, [user.id]);
+
+    // Update user object with the new last_login (and updated_at) values.
+    user.last_login = updateResult.rows[0].last_login;
+    user.updated_at = updateResult.rows[0].updated_at;
+
+    // If all checks pass, return a success response.
+    return { valid: true, user };
+  } catch (error) {
+    console.error('Error during user validation:', error);
+    return { valid: false, reason: 'Error during validation' };
+  }
+}
+
+
+
+// Connect to DB
+const pgClient = new Client({
+  connectionString: process.env.DATABASE_URL, // e.g., postgres://user:password@localhost:5432/dbname
+});
+pgClient.connect()
+  .then(() => console.log('Connected to PostgreSQL'))
+  .catch(err => console.error('PostgreSQL connection error', err));
+
+// Ensure DB has a users table
+ensureUsersTableExists();
+
+// validateUser('admin', 'admin', 'main');
+
+
+// ----------------------------------------
+// Start the Server
+// ----------------------------------------
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
