@@ -36,14 +36,14 @@ const StyledTreeItem = React.forwardRef(function StyledTreeItem(
   ref: React.Ref<HTMLLIElement>,
 ) {
   // Destructure props
-  const { nodeId, label, children, ...other } = props;
+  const { itemId, label, children, ...other } = props;
 
   return (
     <TreeItem
-      nodeId={nodeId} // Pass nodeId explicitly
-      label={label}   // Pass label explicitly
+      itemId={itemId}
+      label={label}
       ref={ref}
-      sx={{ // Apply styles directly using the sx prop
+      sx={{
         // Add custom styles here if desired
         // Example:
         // color: 'text.secondary',
@@ -55,9 +55,9 @@ const StyledTreeItem = React.forwardRef(function StyledTreeItem(
         //   color: 'primary.contrastText',
         // },
       }}
-      {...other} // Spread any remaining props
+      {...other}
     >
-      {children} {/* Render children */} 
+      {children}
     </TreeItem>
   );
 });
@@ -293,7 +293,7 @@ export default function FileDrawer() {
     nodes.map((node) => (
       <StyledTreeItem
         key={node.id}
-        nodeId={node.id}
+        itemId={node.id}
         label={node.name}
         onClick={() => handleNodeSelect(node)}
       >
