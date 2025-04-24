@@ -65,8 +65,8 @@ const getModeForPath = (filePath: string | null): string => {
   }
 };
 
-// Base URL for API calls
-const API_BASE_URL = 'http://qpcs-server:3000';
+// Comment out incorrect base URL
+// const API_BASE_URL = 'http://qpcs-server:3000'; // Assume this was defined here or imported
 
 export default function Home() {
   // Get state from context
@@ -223,7 +223,8 @@ export default function Home() {
       
       console.log(`Attempting to save ${currentFilePath} to branch ${selectedBranch} as user ${selectedUser} with bump: ${versionBumpType}`);
 
-      const response = await axios.post(`${API_BASE_URL}/commit-file`, {
+      // Use relative path
+      const response = await axios.post(`/api/github/commit-file`, {
         path: currentFilePath,
         message: finalCommitMessage, // Use the modified message
         content: base64Content,
@@ -293,7 +294,8 @@ export default function Home() {
     setDiffResult(null);
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/diff-file`, {
+      // Use relative path
+      const response = await axios.post(`/api/github/diff-file`, {
         path: currentFilePath,
         baseBranch: selectedBranch,      
         compareBranch: compareToBranch, 
