@@ -738,12 +738,11 @@ export default function Header() {
       setIsLoadingUsersData(true);
       setUserManagementError(null);
       setUsersManagementData([]);
-      // setEditedUsersData({}); // Clear edits when refetching (if edits state exists)
       try {
-          console.log("Fetching all users data...");
-          // Update path to match the actual API route location
-          const response = await axios.get<any[]>(`/api/users`);
-          // Map the response to ensure `id` is set correctly and permissions is an array
+          console.log("Fetching ALL users data for management..."); // Emphasize 'ALL'
+          // Ensure this path points to the /api/users/all route
+          const response = await axios.get<any[]>(`/api/users/all`); 
+          // Map the response
            const formattedData = response.data.map(user => ({
                id: user.username, // Use username as id for DataGrid
                username: user.username,
