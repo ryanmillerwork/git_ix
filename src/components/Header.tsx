@@ -897,7 +897,7 @@ export default function Header() {
           if (needsUpdate) {
               console.log("Sending update for user:", username, "Payload:", payload);
               updatePromises.push(
-                  axios.post('/api/update-account-status', payload)
+                  axios.post('/api/users/update-status', payload)
               );
           }
       });
