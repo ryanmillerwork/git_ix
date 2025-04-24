@@ -15,6 +15,13 @@ interface TreeItem {
     url?: string;
 }
 
+// CORS Headers
+const corsHeaders = {
+    'Access-Control-Allow-Origin': '*', // Allow all origins (adjust for production)
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
 /**
  * GET /api/github/folder-structure
  * Returns directory structure for a folder (requires branch in query).
@@ -28,7 +35,7 @@ export async function GET(request: Request) {
 
     if (!branch) {
         console.log('[API /github/folder-structure] Error: Missing branch parameter.');
-        return NextResponse.json({ error: 'Missing required query parameter: branch' }, { status: 400 });
+        return NextResponse.json({ error: 'Missing required query parameter: branch' }, { status: 400, headers: corsHeaders });
     }
 
     try {
@@ -53,10 +60,15 @@ export async function GET(request: Request) {
             console.log(`[API /github/folder-structure] Found ${tree.length} total items, returning ${filteredTree.length} items under '${folderPath}'`);
         }
 
-        return NextResponse.json(filteredTree);
+        return NextResponse.json(filteredTree, { headers: corsHeaders });
 
     } catch (error: unknown) {
-        console.error("[API /github/folder-structure] Error fetching folder structure:", error.message);
+        // Check if error is an instance of Error before accessing message
+        if (error instanceof Error) {
+            console.error("[API /github/folder-structure] Error fetching folder structure:", error.message);
+        } else {
+             console.error("[API /github/folder-structure] Unknown error type fetching folder structure:", error);
+        }
         let status = 500;
         let errorMessage = 'Failed to fetch directory structure from GitHub.';
 
@@ -70,12 +82,14 @@ export async function GET(request: Request) {
                 errorMessage = `Branch '${branch}' or its commit/tree not found.`;
             }
             console.error("[API /github/folder-structure] Error fetching folder structure:", errorMessage);
-        } else {
-             // Handle cases where a non-Error was thrown
-             console.error("[API /github/folder-structure] Unknown error fetching folder structure:", error);
         }
 
         // Distinguish between branch not found vs other errors
-        return NextResponse.json({ error: errorMessage }, { status });
+        return NextResponse.json({ error: errorMessage }, { status, headers: corsHeaders });
     }
+}
+
+// Handle OPTIONS requests for CORS preflight
+export async function OPTIONS(request: Request) {
+    return new NextResponse(null, { headers: corsHeaders });
 }
