@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import axios, { AxiosError } from 'axios';
+import axios from 'axios';
 import { 
     GITHUB_API_BASE, 
     GITHUB_OWNER, 
