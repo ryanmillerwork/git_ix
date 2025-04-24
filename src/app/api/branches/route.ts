@@ -1,20 +1,38 @@
 import { NextResponse } from 'next/server';
+import axios from 'axios'; // Import axios
+
+// Environment variables for GitHub access (ensure these are set in your .env file or environment)
+const GITHUB_OWNER = process.env.GITHUB_OWNER;
+const GITHUB_REPO = process.env.GITHUB_REPO;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN; // Personal Access Token
+const GITHUB_API_BASE = process.env.GITHUB_API_BASE || 'https://api.github.com'; // Default if not set
 
 export async function GET(request: Request) {
-  // Placeholder: Implement logic to fetch branches later
-  console.log('GET /api/branches called');
-  try {
-    // Placeholder: Replace with actual logic to get branches later
-    const placeholderBranches = [
-      { name: 'main', commit: { sha: 'abc', url: '...' }, protected: true },
-      { name: 'develop', commit: { sha: 'def', url: '...' }, protected: false },
-      { name: 'feature/some-feature', commit: { sha: 'ghi', url: '...' }, protected: false },
-      { name: 'old-feature-retired', commit: { sha: 'jkl', url: '...' }, protected: false },
-    ];
+  console.log('GET /api/branches called - Fetching from GitHub');
 
-    return NextResponse.json({ branches: placeholderBranches }); // Return object with branches key
-  } catch (error) {
-    console.error('Error fetching branches:', error);
-    return NextResponse.json({ error: 'Failed to fetch branches' }, { status: 500 });
+  // Check if required environment variables are set
+  if (!GITHUB_OWNER || !GITHUB_REPO || !GITHUB_TOKEN) {
+    console.error('GitHub environment variables (GITHUB_OWNER, GITHUB_REPO, GITHUB_TOKEN) are not set.');
+    return NextResponse.json({ error: 'Server configuration error: Missing GitHub credentials.' }, { status: 500 });
+  }
+
+  try {
+    const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches`;
+    const githubHeaders = {
+      'Authorization': `Bearer ${GITHUB_TOKEN}`,
+      'Accept': 'application/vnd.github.v3+json',
+    };
+
+    console.log(`Fetching branches from: ${url}`);
+    const response = await axios.get(url, { headers: githubHeaders });
+
+    // Important: Wrap the GitHub response array in the { branches: ... } structure
+    return NextResponse.json({ branches: response.data });
+
+  } catch (error: any) {
+    console.error('Error fetching branches from GitHub:', error.response?.data || error.message);
+    const status = error.response?.status || 500;
+    const message = error.response?.data?.message || 'Failed to fetch branches from GitHub';
+    return NextResponse.json({ error: message }, { status });
   }
 } 
