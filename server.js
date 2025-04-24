@@ -1,12 +1,17 @@
 // server.js
+require('dotenv').config();
 const express = require('express');
+const next    = require('next');
 const cors = require('cors');
 const axios = require('axios');
 const { Client } = require('pg');
-require('dotenv').config();
 const bcrypt = require('bcrypt');
 const semver = require('semver'); // Use semver library for robust version handling
 const Diff = require('diff'); // Add the diff library
+
+const dev       = process.env.NODE_ENV !== 'production';
+const NEXT_APP  = next({ dev });
+const handle    = NEXT_APP.getRequestHandler();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -2194,7 +2199,12 @@ ensureUsersTableExists();
 // ----------------------------------------
 // Start the Server
 // ----------------------------------------
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+NEXT_APP.prepare().then(() => {
+  // All unmatched routes (i.e. your React pages) go to Next
+  app.all('*', (req, res) => handle(req, res));
 
+  app.listen(PORT, err => {
+    if (err) throw err;
+    console.log(`> Single-server running on http://localhost:${PORT}`);
+  });
+});
