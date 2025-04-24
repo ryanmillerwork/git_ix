@@ -312,7 +312,8 @@ export default function Drawer() {
           // Use relative path for same-origin requests
           const url = `/api/github/folder-structure?branch=${encodeURIComponent(branch)}`;
           const response = await axios.get<ApiTreeItem[]>(url);
-          const basePath = ''; // Changed from 'systems/ess'
+          // Set the basePath to filter for 'systems/ess'
+          const basePath = 'systems/ess'; 
           const tree = buildTree(response.data, basePath);
           setTreeData(tree);
       } catch (err: any) {
