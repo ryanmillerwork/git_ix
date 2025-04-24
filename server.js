@@ -2208,10 +2208,24 @@ const listEndpoints = (app) =>
       return `${methods} ${r.route.path}`;
     });
 
-console.log('→ Registered Express routes:\n' + listEndpoints(app).join('\n'));
+// console.log('→ Registered Express routes:\n' + listEndpoints(app).join('\n'));
 
 
 NEXT_APP.prepare().then(() => {
+  if (app._router && Array.isArray(app._router.stack)) {
+    console.log('→ Registered Express routes:');
+    app._router.stack.forEach(layer => {
+      if (layer.route && layer.route.path) {
+        const methods = Object
+          .keys(layer.route.methods)
+          .map(m => m.toUpperCase())
+          .join(',');
+        console.log(`  ${methods} ${layer.route.path}`);
+      }
+    });
+  } else {
+    console.log('(!) No Express routes found (app._router missing).');
+  }
   // All unmatched routes (i.e. your React pages) go to Next
   app.all('*', (req, res) => handle(req, res));
 
