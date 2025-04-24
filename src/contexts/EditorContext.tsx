@@ -42,6 +42,13 @@ interface EditorContextType {
     backendStatus: BackendStatus;
     checkBackendHealth: () => Promise<void>;
     addRetryAction: (id: string, action: () => Promise<void>) => void;
+    renameItem: (path: string, newName: string) => Promise<void>;
+    /** Delete the item named `name` at `path` */
+    deleteItem: (path: string, name: string) => Promise<void>;
+    /** Create a new file `fileName` under `path` */
+    addFile: (path: string, fileName: string) => Promise<void>;
+    /** Create a new folder `folderName` under `path` */
+    addFolder: (path: string, folderName: string) => Promise<void>;
 }
 
 const EditorContext = createContext<EditorContextType | undefined>(undefined);
