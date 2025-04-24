@@ -184,7 +184,7 @@ export default function Header() {
     let isMounted = true; 
     setLoadingBranches(true);
     try {
-        const response = await axios.get<Branch[]>(`${API_BASE_URL}/branches`);
+        const response = await axios.get<Branch[]>('/api/branches');
         if (isMounted) {
             const activeBranches = filterRetiredBranches(response.data);
             const mainBranch = activeBranches.find(b => b.name === 'main');
@@ -216,7 +216,7 @@ export default function Header() {
     let isMounted = true;
     setLoadingUsers(true);
     try {
-        const response = await axios.get<User[]>(`${API_BASE_URL}/users`);
+        const response = await axios.get<User[]>('/api/users');
         if (isMounted) {
             setUsers(response.data);
             // Clear user-specific error on success (or combined error if appropriate)
@@ -385,7 +385,7 @@ export default function Header() {
     setIsAddingUser(true);
 
     try {
-        const response = await axios.post(`${API_BASE_URL}/new_user`, {
+        const response = await axios.post('/api/new_user', {
             username: newUsername,
             email: newUserEmail, // Send email, backend handles if it's null/empty
             password: newUserPassword,
@@ -480,7 +480,7 @@ export default function Header() {
 
     try {
       console.log("--- Sending Create Branch Request ---");
-      const response = await axios.post(`${API_BASE_URL}/create-branch`, {
+      const response = await axios.post('/api/create-branch', {
         username: selectedUser, // Send current user/pass for validation
         password: password,
         newBranchName: newBranchName,
@@ -494,7 +494,7 @@ export default function Header() {
         // Refresh branches list automatically - USE FILTER
         try {
           console.log("Refreshing branch list...");
-          const branchesResponse = await axios.get<Branch[]>(`${API_BASE_URL}/branches`);
+          const branchesResponse = await axios.get<Branch[]>('/api/branches');
           const activeBranches = filterRetiredBranches(branchesResponse.data); // Filter here
           const mainBranch = activeBranches.find(b => b.name === 'main');
           const otherBranches = activeBranches.filter(b => b.name !== 'main');
@@ -569,7 +569,7 @@ export default function Header() {
 
     try {
       console.log("--- Sending Retire Branch Request ---");
-      const response = await axios.post(`${API_BASE_URL}/retire-branch`, { // Use new endpoint
+      const response = await axios.post('/api/retire-branch', { // Use new endpoint
         username: selectedUser,
         password: password,
         branchToRetire: branchToRetire, // Use correct field name
@@ -585,7 +585,7 @@ export default function Header() {
         // Refresh branches list - USE FILTER
         try {
           console.log("Refreshing branch list...");
-          const branchesResponse = await axios.get<Branch[]>(`${API_BASE_URL}/branches`);
+          const branchesResponse = await axios.get<Branch[]>('/api/branches');
           const activeBranches = filterRetiredBranches(branchesResponse.data); // Filter here
           const mainBranch = activeBranches.find(b => b.name === 'main');
           const otherBranches = activeBranches.filter(b => b.name !== 'main');
@@ -628,7 +628,7 @@ export default function Header() {
       setRevertCommitsData([]); // Clear previous data
       setSelectedCommitId(null); // Clear selection
       try {
-          const response = await axios.get<CommitInfo[]>(`${API_BASE_URL}/commits?branch=${encodeURIComponent(branchName)}`);
+          const response = await axios.get<CommitInfo[]>(`/api/commits?branch=${encodeURIComponent(branchName)}`);
           setRevertCommitsData(response.data);
       } catch (err: any) {
           console.error("Fetch commits error:", err);
@@ -690,7 +690,7 @@ export default function Header() {
       console.log(" Revert to Commit ID:", selectedCommitId);
 
       try {
-          const response = await axios.post(`${API_BASE_URL}/revert-branch`, {
+          const response = await axios.post('/api/revert-branch', {
               username: selectedUser,
               password: password,
               branchToRevert: revertTargetBranch,
@@ -743,7 +743,7 @@ export default function Header() {
           console.log("Fetching all users data...");
           // Assuming endpoint returns: { username, branch_permissions, active }
           // Note: Backend used 'active', frontend uses 'is_active' - align if needed
-          const response = await axios.get<any[]>(`${API_BASE_URL}/users-all`);
+          const response = await axios.get<any[]>(`/api/users-all`);
           // Map the response to ensure `id` is set correctly and permissions is an array
            const formattedData = response.data.map(user => ({
                id: user.username, // Use username as id for DataGrid
@@ -899,7 +899,7 @@ export default function Header() {
           if (needsUpdate) {
               console.log("Sending update for user:", username, "Payload:", payload);
               updatePromises.push(
-                  axios.post(`${API_BASE_URL}/update-account-status`, payload)
+                  axios.post('/api/update-account-status', payload)
               );
           }
       });
@@ -946,7 +946,7 @@ export default function Header() {
                // *** Refetch ACTIVE users for the main dropdown ***
                console.log("Refreshing active user list for dropdown...");
                setLoadingUsers(true); // Indicate loading in the dropdown
-               axios.get<User[]>(`${API_BASE_URL}/users`)
+               axios.get<User[]>('/api/users')
                  .then(response => {
                    setUsers(response.data); // Update the state for the main dropdown
                  })

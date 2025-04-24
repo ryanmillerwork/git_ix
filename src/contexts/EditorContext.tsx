@@ -113,8 +113,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         }
         try {
             // Use relative path for consistency
-            const cacheBuster = Date.now(); // Add cache buster
-            const response = await axios.get(`/api/health?_=${cacheBuster}`, { timeout: 5000 }); // Append to URL
+            const response = await axios.get(`/api/health`, { timeout: 5000 }); // Removed cache buster
             if (response.status === 200 && response.data?.status === 'ok') {
                 // Check if status is changing from offline to online
                 const wasOffline = backendStatusRef.current === 'offline'; 
