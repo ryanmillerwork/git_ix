@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import {
     GITHUB_API_BASE,
     GITHUB_OWNER,
@@ -27,10 +27,21 @@ export async function GET() {
 
     return NextResponse.json(response.data);
 
-  } catch (error: any) {
-    console.error('[API /github/branches] Error fetching branches:', error.response?.data || error.message);
-    const status = error.response?.status || 500;
-    const errorMessage = error.response?.data?.message || 'Failed to fetch branches from GitHub.';
+  } catch (error: unknown) {
+    let status = 500;
+    let errorMessage = 'Failed to fetch branches from GitHub.';
+
+    if (axios.isAxiosError(error)) {
+        console.error('[API /github/branches] Axios error fetching branches:', error.response?.data || error.message);
+        status = error.response?.status || 500;
+        errorMessage = error.response?.data?.message || errorMessage;
+    } else if (error instanceof Error) {
+        console.error('[API /github/branches] Error fetching branches:', error.message);
+        errorMessage = error.message;
+    } else {
+        console.error('[API /github/branches] Unexpected error fetching branches:', error);
+    }
+
     return NextResponse.json({ error: errorMessage }, { status });
   }
 }

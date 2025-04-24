@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { 
     GITHUB_API_BASE, 
     GITHUB_OWNER, 
@@ -55,7 +55,6 @@ export async function POST(request: Request) {
 
   const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`;
   let commitSha: string | null = null; // To store the SHA of the new commit
-  let commitSuccess = false;
   let newCommitData: any = null;
 
   try {
@@ -66,12 +65,19 @@ export async function POST(request: Request) {
       const getResp = await axios.get(`${url}?ref=${encodeURIComponent(branch)}`, { headers: githubAuthHeaders });
       currentSha = getResp.data.sha;
       console.log(`[API /github/commit-file] Existing SHA found: ${currentSha}`);
-    } catch (err: any) {
-      if (err.response?.status === 404) {
-         console.log(`[API /github/commit-file] File ${path} not found on ${branch}. Creating new file.`);
+    } catch (err: unknown) {
+      // Type guard for AxiosError
+      if (axios.isAxiosError(err)) {
+          if (err.response?.status === 404) {
+             console.log(`[API /github/commit-file] File ${path} not found on ${branch}. Creating new file.`);
+          } else {
+             console.error(`[API /github/commit-file] Error checking existing file:`, err.response?.data || err.message);
+            throw new Error('Failed to check existing file on GitHub.'); // Re-throw other errors
+          }
       } else {
-         console.error(`[API /github/commit-file] Error checking existing file:`, err.response?.data || err.message);
-        throw new Error('Failed to check existing file on GitHub.'); // Re-throw other errors
+          // Handle non-Axios errors or rethrow
+          console.error(`[API /github/commit-file] Non-Axios error checking existing file:`, err);
+          throw new Error('An unexpected error occurred while checking the existing file.');
       }
     }
 
@@ -90,7 +96,6 @@ export async function POST(request: Request) {
     if (!commitSha || !newCommitData) {
         throw new Error('Invalid commit response from GitHub after file PUT.');
     }
-    commitSuccess = true;
     console.log(`[API /github/commit-file] File commit successful. SHA: ${commitSha}`);
 
     // 3. Handle Tagging (only if commit succeeded)
@@ -115,9 +120,13 @@ export async function POST(request: Request) {
       } else {
         tagResult.error = 'Could not calculate new tag name or missing commit SHA.';
       }
-    } catch (tagLookupError: any) {
-      console.error('[API /github/commit-file] Error during tag lookup/calculation:', tagLookupError.message);
-      tagResult.error = 'Error processing existing tags.';
+    } catch (tagLookupError: unknown) {
+      let message = 'Error processing existing tags.';
+      if (tagLookupError instanceof Error) {
+          message = tagLookupError.message;
+      }
+      console.error('[API /github/commit-file] Error during tag lookup/calculation:', message);
+      tagResult.error = message;
       // Proceed without tagging, response handled below
     }
 
@@ -141,14 +150,25 @@ export async function POST(request: Request) {
         }, { status: 207 }); 
     }
 
-  } catch (error: any) {
-    console.error('[API /github/commit-file] Error during file commit process:', error?.response?.data || error.message);
-    const status = error.response?.status || 500;
-    const errorMessage = error.response?.data?.message || 'Failed to commit file to GitHub.';
-    // Provide more specific feedback for common issues like conflicts
-     if (status === 409 || (status === 422 && error.response?.data?.message?.includes('sha'))) {
-        return NextResponse.json({ error: 'Conflict: File may have been updated by someone else. Please refresh and try again.' }, { status: 409 });
-     }
+  } catch (error: unknown) {
+    let status = 500;
+    let errorMessage = 'Failed to commit file to GitHub.';
+    
+    if (axios.isAxiosError(error)) {
+        console.error('[API /github/commit-file] Axios error during file commit process:', error?.response?.data || error.message);
+        status = error.response?.status || 500;
+        errorMessage = error.response?.data?.message || errorMessage;
+         // Provide more specific feedback for common issues like conflicts
+         if (status === 409 || (status === 422 && error.response?.data?.message?.includes('sha'))) {
+            return NextResponse.json({ error: 'Conflict: File may have been updated by someone else. Please refresh and try again.' }, { status: 409 });
+         }
+    } else if (error instanceof Error) {
+         console.error('[API /github/commit-file] Error during file commit process:', error.message);
+         errorMessage = error.message;
+    } else {
+         console.error('[API /github/commit-file] Unexpected error during file commit process:', error);
+    }
+
     return NextResponse.json({ error: errorMessage }, { status });
   }
 } 

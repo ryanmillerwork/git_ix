@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { 
     GITHUB_API_BASE, 
     GITHUB_OWNER, 
@@ -68,14 +68,20 @@ export async function POST(request: Request) {
       // If the GET succeeds, the file exists
       console.log(`[API /github/add-file] Conflict: File already exists at ${fullPath}`);
       return NextResponse.json({ error: `File already exists at path: ${fullPath} on branch ${branch}` }, { status: 409 }); // 409 Conflict
-    } catch (getError: any) {
+    } catch (getError: unknown) {
        // Expecting 404 if file doesn't exist, proceed if so
-       if (getError.response?.status !== 404) {
-           console.error(`[API /github/add-file] Error checking for existing file ${fullPath}:`, getError.response?.data || getError.message);
-           throw new Error('Failed to check if file exists before creation.'); // Rethrow unexpected errors
+       if (axios.isAxiosError(getError)) {
+           if (getError.response?.status !== 404) {
+               console.error(`[API /github/add-file] Error checking for existing file ${fullPath}:`, getError.response?.data || getError.message);
+               throw new Error('Failed to check if file exists before creation.'); // Rethrow unexpected errors
+           }
+           // File not found (404), good to proceed with creation
+           console.log(`[API /github/add-file] File ${fullPath} does not exist on branch ${branch}. Proceeding with creation.`);
+       } else {
+           // Handle non-Axios errors or rethrow
+           console.error(`[API /github/add-file] Non-Axios error checking for existing file ${fullPath}:`, getError);
+           throw new Error('An unexpected error occurred while checking file existence.');
        }
-        // File not found (404), good to proceed with creation
-       console.log(`[API /github/add-file] File ${fullPath} does not exist on branch ${branch}. Proceeding with creation.`);
     }
 
     // 2. Commit the new blank file via PUT
@@ -115,9 +121,13 @@ export async function POST(request: Request) {
         } else {
             tagResult.error = 'Could not calculate new tag name or missing commit SHA.';
         }
-    } catch (tagLookupError: any) {
-        console.error('[API /github/add-file] Error during tag lookup/calculation:', tagLookupError.message);
-        tagResult.error = 'Error processing existing tags.';
+    } catch (tagLookupError: unknown) {
+        let message = 'Error processing existing tags.';
+        if (tagLookupError instanceof Error) {
+            message = tagLookupError.message;
+        }
+        console.error('[API /github/add-file] Error during tag lookup/calculation:', message);
+        tagResult.error = message;
     }
 
     // 4. Respond based on commit and tag results
@@ -142,16 +152,28 @@ export async function POST(request: Request) {
         ...(tagResult.error && { tagError: tagResult.error })
     }, { status: finalStatus });
 
-  } catch (error: any) {
-    console.error(`[API /github/add-file] Error creating file '${fullPath}' on branch '${branch}':`, error.response?.data || error.message);
-     // Check if it was the PUT call that failed specifically due to conflict (though pre-check should prevent this)
-    if (error.response?.status === 422 && error.response?.data?.message?.includes('sha')) {
-         // This specific 422 usually means SHA was provided for a new file OR path conflict
-         return NextResponse.json({ error: `Conflict: File '${fullPath}' might have been created concurrently.` }, { status: 409 });
+  } catch (error: unknown) {
+    let status = 500;
+    let errorMessage = 'Failed to create file on GitHub.';
+
+    if (axios.isAxiosError(error)) {
+        console.error(`[API /github/add-file] Axios error creating file '${fullPath}' on branch '${branch}':`, error.response?.data || error.message);
+        status = error.response?.status || 500;
+        errorMessage = error.response?.data?.message || error.message || errorMessage;
+
+        // Check if it was the PUT call that failed specifically due to conflict (though pre-check should prevent this)
+        if (status === 422 && error.response?.data?.message?.includes('sha')) {
+            // This specific 422 usually means SHA was provided for a new file OR path conflict
+            return NextResponse.json({ error: `Conflict: File '${fullPath}' might have been created concurrently.` }, { status: 409 });
+        }
+    } else if (error instanceof Error) {
+        console.error(`[API /github/add-file] Error creating file '${fullPath}' on branch '${branch}':`, error.message);
+        errorMessage = error.message;
     } else {
-         const status = error.response?.status || 500;
-         const errorMessage = error.response?.data?.message || error.message || 'Failed to create file on GitHub.';
-         return NextResponse.json({ error: errorMessage }, { status });
+        // Fallback for non-Error types
+        console.error(`[API /github/add-file] Unexpected error creating file '${fullPath}' on branch '${branch}':`, error);
     }
+
+    return NextResponse.json({ error: errorMessage }, { status });
   }
 } 

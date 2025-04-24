@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import * as semver from 'semver';
 import { 
     GITHUB_API_BASE, 
@@ -118,15 +118,25 @@ export async function GET(request: Request) {
         console.log(`[API /github/commits] Processed ${processedCommits.length} commits.`);
         return NextResponse.json(processedCommits);
 
-    } catch (error: any) {
-        console.error(`[API /github/commits] Error fetching commits/tags for branch '${branch}':`, error.response?.data || error.message);
-        const status = error.response?.status || 500;
+    } catch (error: unknown) {
+        let status = 500;
         let errorMessage = 'Failed to fetch commit history from GitHub.';
-        if (status === 404) {
-            errorMessage = `Branch '${branch}' not found or repository inaccessible.`;
-        } else if (status === 409) {
-             errorMessage = `Repository is empty or branch '${branch}' has no commits.`;
+        
+        if (axios.isAxiosError(error)) {
+            console.error(`[API /github/commits] Axios error fetching commits/tags for branch '${branch}':`, error.response?.data || error.message);
+            status = error.response?.status || 500;
+            if (status === 404) {
+                errorMessage = `Branch '${branch}' not found or repository inaccessible.`;
+            } else if (status === 409) {
+                 errorMessage = `Repository is empty or branch '${branch}' has no commits.`;
+            }
+        } else if (error instanceof Error) {
+             console.error(`[API /github/commits] Error fetching commits/tags for branch '${branch}':`, error.message);
+             errorMessage = error.message;
+        } else {
+             console.error(`[API /github/commits] Unexpected error fetching commits/tags for branch '${branch}':`, error);
         }
+
         return NextResponse.json({ error: errorMessage }, { status });
     }
 } 

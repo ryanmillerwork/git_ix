@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { 
     GITHUB_API_BASE, 
     GITHUB_OWNER, 
@@ -69,14 +69,20 @@ export async function POST(request: Request) {
       // If the GET succeeds, the folder (or a file with the same name) exists
       console.log(`[API /github/add-folder] Conflict: Folder/file already exists at ${folderCheckPath}`);
       return NextResponse.json({ error: `Folder or file already exists at path: ${folderCheckPath} on branch ${branch}` }, { status: 409 }); // 409 Conflict
-    } catch (getError: any) {
+    } catch (getError: unknown) {
        // Expecting 404 if folder doesn't exist, proceed if so
-       if (getError.response?.status !== 404) {
-           console.error(`[API /github/add-folder] Error checking for existing folder ${folderCheckPath}:`, getError.response?.data || getError.message);
-           throw new Error('Failed to check if folder exists before creation.'); // Rethrow unexpected errors
+       if (axios.isAxiosError(getError)) {
+           if (getError.response?.status !== 404) {
+               console.error(`[API /github/add-folder] Error checking for existing folder ${folderCheckPath}:`, getError.response?.data || getError.message);
+               throw new Error('Failed to check if folder exists before creation.'); // Rethrow unexpected errors
+           }
+            // Path not found (404), good to proceed with creation
+           console.log(`[API /github/add-folder] Path ${folderCheckPath} does not exist on branch ${branch}. Proceeding with folder creation.`);
+       } else {
+           // Handle non-Axios errors or rethrow
+           console.error(`[API /github/add-folder] Non-Axios error checking for existing folder ${folderCheckPath}:`, getError);
+           throw new Error('An unexpected error occurred while checking folder existence.');
        }
-        // Path not found (404), good to proceed with creation
-       console.log(`[API /github/add-folder] Path ${folderCheckPath} does not exist on branch ${branch}. Proceeding with folder creation.`);
     }
 
     // 2. Attempt to create the .gitkeep file via PUT
@@ -104,16 +110,28 @@ export async function POST(request: Request) {
         commit: newCommitData 
     }, { status: 201 }); // 201 Created
 
-  } catch (error: any) {
-    console.error(`[API /github/add-folder] Error creating folder '${path}/${foldername}' on branch '${branch}':`, error.response?.data || error.message);
-    // Check for specific GitHub errors if needed
-    if (error.response?.status === 409 || (error.response?.status === 422 && error.response?.data?.message?.includes('sha'))) {
-        // 422 with SHA message usually indicates the file already exists (race condition maybe)
-        return NextResponse.json({ error: `Conflict: Folder '${path}/${foldername}' might already exist or have been created concurrently.` }, { status: 409 });
+  } catch (error: unknown) {
+    let status = 500;
+    let errorMessage = 'Failed to create folder on GitHub.';
+
+    if (axios.isAxiosError(error)) {
+        console.error(`[API /github/add-folder] Axios error creating folder '${path}/${foldername}' on branch '${branch}':`, error.response?.data || error.message);
+        status = error.response?.status || 500;
+        errorMessage = error.response?.data?.message || error.message || errorMessage;
+
+        // Check for specific GitHub errors if needed
+        if (status === 409 || (status === 422 && error.response?.data?.message?.includes('sha'))) {
+            // 422 with SHA message usually indicates the file already exists (race condition maybe)
+            return NextResponse.json({ error: `Conflict: Folder '${path}/${foldername}' might already exist or have been created concurrently.` }, { status: 409 });
+        }
+    } else if (error instanceof Error) {
+         console.error(`[API /github/add-folder] Error creating folder '${path}/${foldername}' on branch '${branch}':`, error.message);
+         errorMessage = error.message;
     } else {
-        const status = error.response?.status || 500;
-        const errorMessage = error.response?.data?.message || error.message || 'Failed to create folder on GitHub.';
-        return NextResponse.json({ error: errorMessage }, { status });
+         // Fallback for non-Error types
+         console.error(`[API /github/add-folder] Unexpected error creating folder '${path}/${foldername}' on branch '${branch}':`, error);
     }
+    
+    return NextResponse.json({ error: errorMessage }, { status });
   }
 } 
