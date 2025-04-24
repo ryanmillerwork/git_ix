@@ -55,7 +55,8 @@ import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutl
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
 const drawerWidth = 300;
-const API_BASE_URL = 'http://qpcs-server:3000';
+// Remove or comment out the incorrect base URL
+// const API_BASE_URL = 'http://qpcs-server:3000';
 
 // --- Interfaces ---
 interface ApiTreeItem {
@@ -308,7 +309,8 @@ export default function Drawer() {
       setLoading(true);
       setError(null);
       try {
-          const url = `${API_BASE_URL}/folder-structure?branch=${encodeURIComponent(branch)}`;
+          // Use relative path for same-origin requests
+          const url = `/api/github/folder-structure?branch=${encodeURIComponent(branch)}`;
           const response = await axios.get<ApiTreeItem[]>(url);
           const basePath = ''; // Changed from 'systems/ess'
           const tree = buildTree(response.data, basePath);
@@ -434,7 +436,7 @@ export default function Drawer() {
     }
 
     try {
-        const response = await axios.post(`${API_BASE_URL}/copy-files`, {
+        const response = await axios.post(`/api/github/copy-files`, {
             username: context.selectedUser,
             password: context.password,
             source_branch: context.selectedBranch,
@@ -758,7 +760,8 @@ export default function Drawer() {
     if (newItemType === 'file') {
       console.log(`Calling API to create file: ${newItemName} in folder: ${modalTargetPath} on branch ${selectedBranch}`);
       try {
-        const response = await axios.post(`${API_BASE_URL}/add-file`, {
+        // Use relative path
+        const response = await axios.post(`/api/github/add-file`, {
           username: selectedUser,
           password: password,
           branch: selectedBranch,
@@ -791,7 +794,8 @@ export default function Drawer() {
     } else if (newItemType === 'folder') {
         console.log(`Calling API to create FOLDER: ${newItemName} in path: ${modalTargetPath} on branch ${selectedBranch}`);
         try {
-          const response = await axios.post(`${API_BASE_URL}/add-folder`, {
+          // Use relative path
+          const response = await axios.post(`/api/github/add-folder`, {
             username: selectedUser,
             password: password,
             branch: selectedBranch,
@@ -848,7 +852,8 @@ export default function Drawer() {
 
     // --- Actual API Call --- 
     try {
-      const response = await axios.delete(`${API_BASE_URL}/item`, {
+      // Use relative path
+      const response = await axios.delete(`/api/item`, {
         // Axios DELETE requests send data in the 'data' property
         data: {
           username: selectedUser,
@@ -937,7 +942,8 @@ export default function Drawer() {
 
     // --- Actual API Call --- 
     try {
-       const response = await axios.post(`${API_BASE_URL}/copy-item-intra-branch`, {
+       // Use relative path
+       const response = await axios.post(`/api/github/copy-item-intra-branch`, {
           username: selectedUser,
           password: password,
           branch: selectedBranch,
@@ -1018,7 +1024,8 @@ export default function Drawer() {
 
     // --- Actual API Call --- 
     try {
-      const response = await axios.post(`${API_BASE_URL}/rename-item`, {
+      // Use relative path
+      const response = await axios.post(`/api/github/rename-item`, {
          username: selectedUser,
          password: password,
          branch: selectedBranch,
@@ -1185,8 +1192,9 @@ export default function Drawer() {
           };
 
           // 3. Make API Call
-          console.log("Sending payload to /upload-files");
-          const response = await axios.post(`${API_BASE_URL}/upload-files`, payload);
+          console.log("Sending payload to /api/github/upload-files");
+          // Use relative path
+          const response = await axios.post(`/api/github/upload-files`, payload);
 
           // 4. Handle Response
           console.log("Backend Response Status:", response.status);
