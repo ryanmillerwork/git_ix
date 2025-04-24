@@ -628,7 +628,7 @@ export default function Header() {
       setRevertCommitsData([]); // Clear previous data
       setSelectedCommitId(null); // Clear selection
       try {
-          const response = await axios.get<CommitInfo[]>(`/api/commits?branch=${encodeURIComponent(branchName)}`);
+          const response = await axios.get<CommitInfo[]>(`/api/github/commits?branch=${encodeURIComponent(branchName)}`);
           setRevertCommitsData(response.data);
       } catch (err: any) {
           console.error("Fetch commits error:", err);
