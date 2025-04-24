@@ -14,6 +14,38 @@ import {
 import { validateUser } from '@/lib/server/auth'; // Adjust path as needed
 import { getLatestSemanticTag, incrementVersion, hasInvalidNameChars, hasUnsafePathSegments } from '@/lib/server/utils'; // Adjust path as needed
 
+// Interface for the commit part of the GitHub API response
+// (Ensure this matches or is compatible with the one in add-file)
+interface GitHubCommitResponseCommit {
+  sha: string;
+  node_id: string;
+  url: string;
+  html_url: string;
+  author: { 
+    name?: string; 
+    email?: string; 
+    date?: string; 
+    login?: string; 
+    id?: number;
+  };
+  committer: { 
+    name?: string; 
+    email?: string; 
+    date?: string; 
+    login?: string; 
+    id?: number;
+  };
+  tree: { sha: string; url: string };
+  message: string;
+  parents: { sha: string; url: string; html_url?: string }[];
+  verification?: { 
+    verified: boolean; 
+    reason: string; 
+    signature: string | null; 
+    payload: string | null; 
+  };
+}
+
 export const dynamic = 'force-dynamic'; // Revalidate on every request
 
 /**
@@ -75,12 +107,19 @@ export async function POST(request: Request) {
     try {
       const sourceResponse = await axios.get(sourceContentsUrl, { headers: githubAuthHeaders });
       sourceItemData = sourceResponse.data;
-    } catch (error: any) {
-      if (error.response?.status === 404) {
-        console.log(`[API /github/copy-item-intra-branch] Source path '${sourcePath}' not found.`);
-        return NextResponse.json({ error: `Source path '${sourcePath}' not found.` }, { status: 404 });
+    } catch (error: unknown) {
+      // Use type guards
+      if (axios.isAxiosError(error)) {
+          if (error.response?.status === 404) {
+            console.log(`[API /github/copy-item-intra-branch] Source path '${sourcePath}' not found.`);
+            return NextResponse.json({ error: `Source path '${sourcePath}' not found.` }, { status: 404 });
+          }
+          console.error(`[API /github/copy-item-intra-branch] Error fetching source item data:`, error.response?.data || error.message);
+      } else if (error instanceof Error) {
+           console.error(`[API /github/copy-item-intra-branch] Error fetching source item data:`, error.message);
+      } else {
+           console.error(`[API /github/copy-item-intra-branch] Error fetching source item data: Unknown error`, error);
       }
-      console.error(`[API /github/copy-item-intra-branch] Error fetching source item data:`, error.response?.data || error.message);
       throw new Error('Failed to fetch source item details.');
     }
 
@@ -89,7 +128,7 @@ export async function POST(request: Request) {
      console.log(`[API /github/copy-item-intra-branch] Determined source type: ${sourceType}`);
 
     let newCommitSha: string | null = null;
-    let finalCommitData: any = null;
+    let finalCommitData: GitHubCommitResponseCommit | null = null;
 
     // --- Handle FILE Copy (Contents API PUT) ---
     if (sourceType === 'file') {
@@ -107,9 +146,18 @@ export async function POST(request: Request) {
             const destCheckResponse = await axios.get(`${destContentsUrl}?ref=${encodeURIComponent(branch)}`, { headers: githubAuthHeaders });
             currentDestSha = destCheckResponse.data.sha;
             console.log(`[API /github/copy-item-intra-branch] Destination file exists, SHA: ${currentDestSha}. Will overwrite.`);
-        } catch (error: any) {
-            if (error.response?.status !== 404) { // Ignore 404
-                console.error(`[API /github/copy-item-intra-branch] Error checking destination path ${fullNewPath}:`, error.response?.data || error.message);
+        } catch (error: unknown) {
+            // Use type guards
+            if (axios.isAxiosError(error)) {
+                if (error.response?.status !== 404) { // Ignore 404
+                    console.error(`[API /github/copy-item-intra-branch] Error checking destination path ${fullNewPath}:`, error.response?.data || error.message);
+                    throw new Error('Failed to check destination path.');
+                }
+            } else if (error instanceof Error) {
+                console.error(`[API /github/copy-item-intra-branch] Error checking destination path ${fullNewPath}:`, error.message);
+                throw new Error('Failed to check destination path.');
+            } else {
+                console.error(`[API /github/copy-item-intra-branch] Error checking destination path ${fullNewPath}: Unknown error`, error);
                 throw new Error('Failed to check destination path.');
             }
             console.log(`[API /github/copy-item-intra-branch] Destination file does not exist. Will create.`);
@@ -163,14 +211,55 @@ export async function POST(request: Request) {
                     throw new Error('Invalid commit response after empty folder PUT.');
                 }
                  console.log(`[API /github/copy-item-intra-branch] Empty folder created via PUT. Commit SHA: ${newCommitSha}`);
-            } catch (putError: any) {
-                console.error(`[API /github/copy-item-intra-branch] Error creating empty destination folder ${fullNewPath}:`, putError.response?.data || putError.message);
-                // Check for conflict (maybe .gitkeep existed)
-                 if (putError.response?.status === 409 || (putError.response?.status === 422 && putError.response?.data?.message?.includes('sha'))) {
-                     return NextResponse.json({ error: `Conflict creating placeholder in destination folder '${fullNewPath}'. It might already exist.` }, { status: 409 });
-                 }
-                throw new Error(`Failed to create empty destination folder placeholder.`);
-            }
+                } catch (putError: unknown) {
+                    let errorMsg = 'Unknown error creating empty destination folder.';
+                    let isConflict = false;
+                  
+                    if (axios.isAxiosError(putError)) {
+                      const statusCode = putError.response?.status;
+                      const respData = putError.response?.data as { message?: string };
+                  
+                      // detect “already exists” or sha-conflict
+                      if (
+                        statusCode === 409 ||
+                        (statusCode === 422 && respData.message?.includes('sha'))
+                      ) {
+                        isConflict = true;
+                      }
+                  
+                      errorMsg = respData.message ?? putError.message;
+                      console.error(
+                        `[API /github/copy-item-intra-branch] AxiosError creating empty folder:`,
+                        errorMsg
+                      );
+                    } else if (putError instanceof Error) {
+                      errorMsg = putError.message;
+                      console.error(
+                        `[API /github/copy-item-intra-branch] Error creating empty folder:`,
+                        errorMsg
+                      );
+                    } else {
+                      console.error(
+                        `[API /github/copy-item-intra-branch] Unknown error creating empty folder:`,
+                        putError
+                      );
+                    }
+                  
+                    if (isConflict) {
+                      return NextResponse.json(
+                        {
+                          error: `Conflict creating placeholder in destination folder '${fullNewPath}'. It might already exist.`
+                        },
+                        { status: 409 }
+                      );
+                    }
+                  
+                    // re-throw so outer catch can handle it
+                    throw new Error(
+                      `Failed to create empty destination folder placeholder: ${errorMsg}`
+                    );
+                  }
+                  
         } else {
             // Remap items to the new destination path
             const remappedItems = itemsToCopy.map(item => ({
@@ -234,9 +323,16 @@ export async function POST(request: Request) {
             if (newTagName) {
                 tagResult = await createTagReference(newTagName, newCommitSha);
             } else { tagResult.error = 'Could not calculate new tag name.'; }
-        } catch (tagLookupError: any) { 
-             console.error('[API /github/copy-item-intra-branch] Error during tag lookup/calculation:', tagLookupError.message);
-            tagResult.error = 'Error processing existing tags.'; 
+        } catch (tagLookupError: unknown) { 
+             let message = 'Error processing existing tags.';
+             if (tagLookupError instanceof Error) {
+                 message = tagLookupError.message;
+             } else if (axios.isAxiosError(tagLookupError)) {
+                 // Safely access response data if it's an AxiosError
+                 message = tagLookupError.response?.data?.message || tagLookupError.message || message;
+             }
+             console.error('[API /github/copy-item-intra-branch] Error during tag lookup/calculation:', message);
+             tagResult.error = message;
         }
     } else {
         console.log('[API /github/copy-item-intra-branch] Skipping tagging because no commit was generated.');
@@ -264,10 +360,31 @@ export async function POST(request: Request) {
         ...(tagResult.error && { tagError: tagResult.error })
     }, { status: finalStatus });
 
-  } catch (error: any) {
-    console.error(`[API /github/copy-item-intra-branch] Error copying item from '${sourcePath}' to '${fullNewPath}':`, error.response?.data || error.message || error);
-    const status = error.response?.status || 500;
-    const errorMessage = error.response?.data?.message || error.message || 'Failed to copy item.';
+} catch (error: unknown) {
+    let status = 500;
+    let errorMessage = 'Failed to copy item.';
+  
+    if (axios.isAxiosError(error)) {
+      status = error.response?.status ?? 500;
+      const respData = error.response?.data as { message?: string };
+      errorMessage = respData.message ?? error.message;
+      console.error(
+        `[API /github/copy-item-intra-branch] AxiosError copying item:`,
+        errorMessage
+      );
+    } else if (error instanceof Error) {
+      errorMessage = error.message;
+      console.error(
+        `[API /github/copy-item-intra-branch] Error copying item:`,
+        errorMessage
+      );
+    } else {
+      console.error(
+        `[API /github/copy-item-intra-branch] Unknown error copying item:`,
+        error
+      );
+    }
+  
     return NextResponse.json({ error: errorMessage }, { status });
-  }
+  }  
 } 

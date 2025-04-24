@@ -62,7 +62,6 @@ export async function POST(request: Request) {
     for (const filePath of paths) {
       const getUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(source_branch)}`;
       let sourceContent: string | null = null;
-      let sourceEncoding: string | null = null;
 
       // 1. Get file content from source branch
       try {
@@ -71,24 +70,35 @@ export async function POST(request: Request) {
         // Ensure content exists and encoding is base64
         if (getResp.data?.content && getResp.data?.encoding === 'base64') {
             sourceContent = getResp.data.content;
-            sourceEncoding = getResp.data.encoding;
         } else {
             copyResults.push({ path: filePath, status: 'skipped', reason: `Unsupported encoding: ${getResp.data?.encoding || 'unknown'} or missing content` });
             console.warn(`[API /github/copy-files] Skipped ${filePath}: Unsupported encoding or missing content.`);
             continue; // Skip to next file
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
           // If file not found in source, skip it
-          if (err.response?.status === 404) {
-            console.warn(`[API /github/copy-files] Skipped ${filePath}: File not found in source branch ${source_branch}.`);
-            copyResults.push({ path: filePath, status: 'skipped', reason: 'File not found in source branch' });
-            continue; // Skip to next file
+          if (axios.isAxiosError(err)) {
+              if (err.response?.status === 404) {
+                console.warn(`[API /github/copy-files] Skipped ${filePath}: File not found in source branch ${source_branch}.`);
+                copyResults.push({ path: filePath, status: 'skipped', reason: 'File not found in source branch' });
+                continue; // Skip to next file
+              } else {
+                 // Log other errors but continue to try other files
+                 console.error(`[API /github/copy-files] Error fetching source file ${filePath}:`, err.response?.data || err.message);
+                 copyResults.push({ path: filePath, status: 'error', reason: `Error fetching source: ${err.response?.data?.message || err.message}` });
+                 overallSuccess = false; // Mark overall as failed
+                 continue; // Skip to next file
+              }
+          } else if (err instanceof Error) {
+             console.error(`[API /github/copy-files] Error fetching source file ${filePath}:`, err.message);
+             copyResults.push({ path: filePath, status: 'error', reason: `Error fetching source: ${err.message}` });
+             overallSuccess = false;
+             continue;
           } else {
-             // Log other errors but continue to try other files
-             console.error(`[API /github/copy-files] Error fetching source file ${filePath}:`, err.response?.data || err.message);
-             copyResults.push({ path: filePath, status: 'error', reason: `Error fetching source: ${err.response?.data?.message || err.message}` });
-             overallSuccess = false; // Mark overall as failed
-             continue; // Skip to next file
+             console.error(`[API /github/copy-files] Unknown error fetching source file ${filePath}:`, err);
+             copyResults.push({ path: filePath, status: 'error', reason: 'Unknown error fetching source file.' });
+             overallSuccess = false;
+             continue;
           }
       }
 
@@ -99,14 +109,26 @@ export async function POST(request: Request) {
         const checkResp = await axios.get(`${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(target_branch)}`, { headers: githubAuthHeaders });
         targetSha = checkResp.data.sha;
          console.log(`[API /github/copy-files] Target file ${filePath} exists. SHA: ${targetSha}`);
-      } catch (err: any) {
-        if (err.response?.status !== 404) { // Ignore 404
-            console.error(`[API /github/copy-files] Error checking target file ${filePath}:`, err.response?.data || err.message);
-             copyResults.push({ path: filePath, status: 'error', reason: `Error checking target: ${err.response?.data?.message || err.message}` });
+      } catch (err: unknown) {
+          if (axios.isAxiosError(err)) {
+             if (err.response?.status !== 404) { // Ignore 404
+                console.error(`[API /github/copy-files] Error checking target file ${filePath}:`, err.response?.data || err.message);
+                 copyResults.push({ path: filePath, status: 'error', reason: `Error checking target: ${err.response?.data?.message || err.message}` });
+                 overallSuccess = false;
+                 continue;
+             }
+             console.log(`[API /github/copy-files] Target file ${filePath} does not exist. Will create.`);
+          } else if (err instanceof Error) {
+             console.error(`[API /github/copy-files] Error checking target file ${filePath}:`, err.message);
+             copyResults.push({ path: filePath, status: 'error', reason: `Error checking target: ${err.message}` });
              overallSuccess = false;
              continue;
-        }
-         console.log(`[API /github/copy-files] Target file ${filePath} does not exist. Will create.`);
+          } else {
+             console.error(`[API /github/copy-files] Unknown error checking target file ${filePath}:`, err);
+             copyResults.push({ path: filePath, status: 'error', reason: 'Unknown error checking target file.' });
+             overallSuccess = false;
+             continue;
+          }
       }
 
       // 3. Prepare payload and PUT file to target branch
@@ -138,14 +160,21 @@ export async function POST(request: Request) {
             });
              console.log(`[API /github/copy-files] Successfully copied ${filePath}. Commit SHA: ${lastSuccessfulCommitSha}`);
         }
-      } catch (err: any) {
-         console.error(`[API /github/copy-files] Error putting file ${filePath} to target branch:`, err.response?.data || err.message);
-        copyResults.push({
-          path: filePath,
-          status: 'error',
-          reason: `Failed to update target: ${err.response?.data?.message || err.message}`,
-        });
-        overallSuccess = false; // Mark overall success as false if any error occurs
+      } catch (err: unknown) {
+          let message = 'Unknown error during file copy.';
+          let status = 500;
+          if (axios.isAxiosError(err)) {
+             console.error(`[API /github/copy-files] Axios error putting file ${filePath} to target branch:`, err.response?.data || err.message);
+             message = `Failed to update target: ${err.response?.data?.message || err.message}`;
+             status = err.response?.status || 500;
+          } else if (err instanceof Error) {
+             console.error(`[API /github/copy-files] Error putting file ${filePath} to target branch:`, err.message);
+             message = `Failed to update target: ${err.message}`;
+          } else {
+             console.error(`[API /github/copy-files] Unknown error putting file ${filePath} to target branch:`, err);
+          }
+          copyResults.push({ path: filePath, status: 'error', reason: message });
+          overallSuccess = false; // Mark overall success as false if any error occurs
       }
     } // End loop over paths
 
@@ -170,9 +199,15 @@ export async function POST(request: Request) {
             } else {
                 tagResult.error = 'Could not calculate new tag name.';
             }
-        } catch (tagLookupError: any) {
-            console.error('[API /github/copy-files] Error during tag lookup/creation:', tagLookupError.message);
-            tagResult.error = 'Error processing existing tags or creating new tag.';
+        } catch (tagLookupError: unknown) {
+            let message = 'Error processing existing tags or creating new tag.';
+            if (tagLookupError instanceof Error) {
+               message = tagLookupError.message;
+            } else if (axios.isAxiosError(tagLookupError)) {
+               message = tagLookupError.response?.data?.message || tagLookupError.message || message;
+            }
+            console.error('[API /github/copy-files] Error during tag lookup/creation:', message);
+            tagResult.error = message;
         }
 
         // Adjust final message and status based on tagging outcome
@@ -204,9 +239,13 @@ export async function POST(request: Request) {
         ...(tagResult.success && { tag: newTagName })
     }, { status: finalStatus });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Catch unexpected errors during the loop setup or final response generation
-    console.error('[API /github/copy-files] Unexpected error during copy process:', error?.message);
-    return NextResponse.json({ error: 'Unexpected server error during copy process.' }, { status: 500 });
+    let message = 'Unexpected server error during copy process.';
+    if (error instanceof Error) {
+       message = error.message;
+    }
+    console.error('[API /github/copy-files] Unexpected error during copy process:', message);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
