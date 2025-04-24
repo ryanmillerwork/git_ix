@@ -291,14 +291,14 @@ export default function FileDrawer() {
   // --- Render Logic ---
   const renderTree = (nodes: TreeNode[]) => (
     nodes.map((node) => (
-      <StyledTreeItem
+      <TreeItem
         key={node.id}
         itemId={node.id}
         label={node.name}
         onClick={() => handleNodeSelect(node)}
       >
         {node.children && renderTree(node.children)}
-      </StyledTreeItem>
+      </TreeItem>
     ))
   );
 
