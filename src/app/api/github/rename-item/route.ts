@@ -193,9 +193,18 @@ export async function POST(request: Request) {
       if (newTagName && newCommitSha) {
         tagResult = await createTagReference(newTagName, newCommitSha);
       } else { tagResult.error = 'Could not calculate new tag name or missing commit SHA.'; }
-    } catch (tagLookupError: any) {
-      console.error('[API /github/rename-item] Error during tag lookup/calculation:', tagLookupError.message);
-      tagResult.error = 'Error processing existing tags.';
+    } catch (tagLookupError: unknown) {
+      let message = 'Error processing existing tags.';
+      if (tagLookupError instanceof Error) {
+          message = tagLookupError.message;
+          console.error('[API /github/rename-item] Error during tag lookup/calculation:', message);
+      } else if (axios.isAxiosError(tagLookupError)) {
+          message = tagLookupError.response?.data?.message || tagLookupError.message || message;
+          console.error('[API /github/rename-item] Axios Error during tag lookup/calculation:', message);
+      } else {
+          console.error('[API /github/rename-item] Unknown error during tag lookup/calculation:', tagLookupError);
+      }
+      tagResult.error = message;
     }
 
     // 7. Update branch reference
@@ -223,10 +232,46 @@ export async function POST(request: Request) {
       ...(tagResult.error && { tagError: tagResult.error })
     }, { status: finalStatus });
 
-  } catch (error: any) {
-    console.error(`[API /github/rename-item] Error renaming '${originalPath}' to '${newPath}':`, error.response?.data || error.message || error);
-    const status = error.response?.status || (error.message?.includes('fetch tree data') ? 404 : 500); 
-    const errorMessage = error.response?.data?.message || error.message || 'An unexpected error occurred during rename.';
-    return NextResponse.json({ error: `Failed to rename item. ${errorMessage}` }, { status });
+  } catch (err: unknown) {
+    // Default error response
+    let status = 500;
+    let errorMessage = 'An unexpected error occurred during rename.';
+
+    if (axios.isAxiosError(err)) {
+      // AxiosError: safely pull out HTTP status & body message
+      status = err.response?.status ?? 500;
+      const respData = err.response?.data as { message?: string } | undefined;
+      errorMessage = respData?.message ?? err.message;
+      console.error(
+        `[API /github/rename-item] AxiosError renaming '${originalPath}' → '${newPath}':`,
+        errorMessage
+      );
+
+      // Map specific GitHub statuses to more user-friendly text
+      if (status === 404) {
+        errorMessage = `Original path or intermediate directory not found: ${originalPath}`;
+      } else if (status === 409) {
+        errorMessage = `Conflict: an item named '${newName}' already exists in '${parentPath || '/'}'.`;
+      }
+
+    } else if (err instanceof Error) {
+      // Plain JS Error
+      errorMessage = err.message;
+      console.error(
+        `[API /github/rename-item] Error renaming '${originalPath}' → '${newPath}':`,
+        errorMessage
+      );
+    } else {
+      // Something truly unexpected (string, object, etc.)
+      console.error(
+        `[API /github/rename-item] Unknown non-Error throw renaming '${originalPath}' → '${newPath}':`,
+        err
+      );
+    }
+
+    return NextResponse.json(
+      { error: errorMessage },
+      { status }
+    );
   }
 } 

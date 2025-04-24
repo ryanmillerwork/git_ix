@@ -60,13 +60,24 @@ export async function POST(request: Request) {
              compareContent = '';
         }
     } catch (fetchError: any) {
-        if (fetchError.response?.status === 404) {
-            console.warn(`[API /github/diff-file] File ${path} not found on compare branch ${compareBranch}. Assuming empty content.`);
-            compareContent = ''; // Treat as empty if not found on compare branch
+        if (axios.isAxiosError(fetchError)) {
+            if (fetchError.response?.status === 404) {
+                console.warn(`[API /github/diff-file] File ${path} not found on compare branch ${compareBranch}. Assuming empty content.`);
+                compareContent = ''; // Treat as empty if not found on compare branch
+            } else {
+                console.error('[API /github/diff-file] Error retrieving file contents from compare branch:', fetchError.response?.data || fetchError.message);
+                // Re-throw to be caught by the outer catch block
+                throw new Error(`Failed to retrieve file contents for comparison from branch '${compareBranch}'`);
+            }
+        }
+
+        // Handle non-Axios errors
+        if (fetchError instanceof Error) {
+             console.error('[API /github/diff-file] Error retrieving file contents from compare branch:', fetchError.message);
+             throw new Error(`Failed to retrieve file contents for comparison from branch '${compareBranch}': ${fetchError.message}`);
         } else {
-            console.error('[API /github/diff-file] Error retrieving file contents from compare branch:', fetchError.response?.data || fetchError.message);
-            // Re-throw to be caught by the outer catch block
-            throw new Error(`Failed to retrieve file contents for comparison from branch '${compareBranch}'`);
+             console.error('[API /github/diff-file] Unknown error retrieving file contents from compare branch:', fetchError);
+             throw new Error(`Failed to retrieve file contents for comparison from branch '${compareBranch}': Unknown error`);
         }
     }
 
@@ -78,7 +89,7 @@ export async function POST(request: Request) {
     // 3. Format the result for display
     let formattedDiff = "";
     let hasChanges = false; 
-    diffResult.forEach((part: any) => {
+    diffResult.forEach((part: Diff.Change) => {
         const prefix = part.added ? '[+] ' : part.removed ? '[-] ' : '    '; 
         if (part.added || part.removed) {
             hasChanges = true;
@@ -87,7 +98,7 @@ export async function POST(request: Request) {
         if (lines[lines.length - 1] === '') {
             lines.pop(); // Remove trailing empty string from split
         }
-        lines.forEach((line: any) => {
+        lines.forEach((line: string) => {
             // Add comment marker for changed lines
             formattedDiff += `${prefix === '    ' ? '' : '// '}${prefix}${line}\n`; 
         });
@@ -106,8 +117,12 @@ export async function POST(request: Request) {
     console.log('[API /github/diff-file] Diff generation complete.');
     return NextResponse.json({ diff: formattedDiff });
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[API /github/diff-file] Unexpected error during diff generation:', error);
-    return NextResponse.json({ error: error.message || 'An unexpected error occurred during the diff process.' }, { status: 500 });
+    let message = 'An unexpected error occurred during the diff process.';
+    if (error instanceof Error) {
+        message = error.message;
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 } 

@@ -55,13 +55,27 @@ export async function GET(request: Request) {
 
         return NextResponse.json(filteredTree);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("[API /github/folder-structure] Error fetching folder structure:", error.message);
-        // Distinguish between branch not found vs other errors
-        if (error.message.includes('not found') || error.message.includes('404')) {
-            return NextResponse.json({ error: `Branch '${branch}' or its commit/tree not found.` }, { status: 404 });
+        let status = 500;
+        let errorMessage = 'Failed to fetch directory structure from GitHub.';
+
+        // We primarily rely on the helper functions (getBranchHeadSha, getTree) to throw specific errors.
+        // Check the error message content for common issues.
+        if (error instanceof Error) {
+            errorMessage = error.message;
+            // Distinguish between branch not found vs other errors
+            if (errorMessage.includes('not found') || errorMessage.includes('404')) {
+                status = 404;
+                errorMessage = `Branch '${branch}' or its commit/tree not found.`;
+            }
+            console.error("[API /github/folder-structure] Error fetching folder structure:", errorMessage);
         } else {
-            return NextResponse.json({ error: 'Failed to fetch directory structure from GitHub.' }, { status: 500 });
+             // Handle cases where a non-Error was thrown
+             console.error("[API /github/folder-structure] Unknown error fetching folder structure:", error);
         }
+
+        // Distinguish between branch not found vs other errors
+        return NextResponse.json({ error: errorMessage }, { status });
     }
 }

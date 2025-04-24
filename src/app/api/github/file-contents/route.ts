@@ -45,13 +45,24 @@ export async function GET(request: Request) {
         console.log(`[API /github/file-contents] Successfully retrieved content for ${filePath}`);
         return NextResponse.json({ content: fileContent });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error(`[API /github/file-contents] Error retrieving file contents for ${filePath} on branch ${branch}:`, error.response?.data || error.message);
-        const status = error.response?.status || 500;
-        const errorMessage = error.response?.data?.message || 'Error retrieving file contents from GitHub.';
-        // Special handling for 404
-        if (status === 404) {
-             return NextResponse.json({ error: `File not found: ${filePath} on branch ${branch}` }, { status: 404 });
+        let status = 500;
+        let errorMessage = 'Error retrieving file contents from GitHub.';
+
+        if (axios.isAxiosError(error)) {
+             console.error(`[API /github/file-contents] Axios Error retrieving file contents for ${filePath} on branch ${branch}:`, error.response?.data || error.message);
+             status = error.response?.status || 500;
+             errorMessage = error.response?.data?.message || errorMessage;
+             // Special handling for 404
+            if (status === 404) {
+                 return NextResponse.json({ error: `File not found: ${filePath} on branch ${branch}` }, { status: 404 });
+            }
+        } else if (error instanceof Error) {
+             console.error(`[API /github/file-contents] Error retrieving file contents for ${filePath} on branch ${branch}:`, error.message);
+             errorMessage = error.message;
+        } else {
+             console.error(`[API /github/file-contents] Unknown error retrieving file contents for ${filePath} on branch ${branch}:`, error);
         }
         return NextResponse.json({ error: errorMessage }, { status });
     }

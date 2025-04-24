@@ -86,9 +86,33 @@ export async function POST(request: Request) {
         } else {
             tagResult.error = 'Could not calculate new tag name or missing branch SHA.';
         }
-    } catch (tagLookupError: any) {
-        console.error('[API /github/create-branch] Error during tag lookup/calculation:', tagLookupError.message);
-        tagResult.error = 'Error processing existing tags.';
+    } catch (tagErr: unknown) {
+      let message = 'Error processing existing tags.';
+
+      if (axios.isAxiosError(tagErr)) {
+        // Narrow to AxiosError
+        const respData = tagErr.response?.data as { message?: string } | undefined;
+        message = respData?.message ?? tagErr.message;
+        console.error(
+          `[API /github/create-branch] AxiosError during tag lookup:`,
+          message
+        );
+      } else if (tagErr instanceof Error) {
+        // Native Error
+        message = tagErr.message;
+        console.error(
+          `[API /github/create-branch] Error during tag lookup:`,
+          message
+        );
+      } else {
+        // Fallback for anything else
+        console.error(
+          `[API /github/create-branch] Unknown error during tag lookup:`,
+          tagErr
+        );
+      }
+
+      tagResult.error = message;
     }
 
     // 4. Adjust response based on tag result
@@ -114,18 +138,55 @@ export async function POST(request: Request) {
         ...(tagResult.error && { tagError: tagResult.error })
     }, { status: finalStatus });
 
-  } catch (error: any) {
-      console.error(`[API /github/create-branch] Error creating branch '${newBranchName}' from '${sourceBranch}':`, error.response?.data || error.message);
-      // Handle specific GitHub errors
-      if (error.response?.status === 422) {
-          // Branch likely already exists
-          return NextResponse.json({ error: `Failed to create branch. Branch '${newBranchName}' may already exist.` }, { status: 422 });
-      } else if (error.response?.status === 404 || error.message?.includes('not found')) {
-           // Source branch not found (from getBranchHeadSha helper or direct API call)
-          return NextResponse.json({ error: `Source branch '${sourceBranch}' not found.` }, { status: 404 });
-      } else {
-           // Other unexpected errors
-          return NextResponse.json({ error: 'Failed to create branch on GitHub due to an unexpected error.' }, { status: 500 });
+  } catch (err: unknown) {
+    let status = 500;
+    let errorMessage = 'Failed to create branch on GitHub due to an unexpected error.';
+
+    if (axios.isAxiosError(err)) {
+      // AxiosError: can inspect HTTP status and body
+      status = err.response?.status ?? 500;
+      const respData = err.response?.data as { message?: string } | undefined;
+      errorMessage = respData?.message ?? err.message;
+      console.error(
+        `[API /github/create-branch] AxiosError creating branch '${newBranchName}' from '${sourceBranch}':`,
+        errorMessage
+      );
+
+      if (status === 422) {
+        // branch exists
+        return NextResponse.json(
+          { error: `Branch '${newBranchName}' already exists.` },
+          { status: 422 }
+        );
+      } else if (status === 404) {
+        // source branch missing
+        return NextResponse.json(
+          { error: `Source branch '${sourceBranch}' not found.` },
+          { status: 404 }
+        );
       }
+    } else if (err instanceof Error) {
+      // Plain Error
+      errorMessage = err.message;
+      console.error(
+        `[API /github/create-branch] Error creating branch '${newBranchName}' from '${sourceBranch}':`,
+        errorMessage
+      );
+
+      if (errorMessage.includes('not found')) {
+        return NextResponse.json(
+          { error: `Source branch '${sourceBranch}' not found.` },
+          { status: 404 }
+        );
+      }
+    } else {
+      // Non-Error throw
+      console.error(
+        `[API /github/create-branch] Unknown error creating branch '${newBranchName}' from '${sourceBranch}':`,
+        err
+      );
+    }
+
+    return NextResponse.json({ error: errorMessage }, { status });
   }
 } 

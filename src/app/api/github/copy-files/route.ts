@@ -162,11 +162,9 @@ export async function POST(request: Request) {
         }
       } catch (err: unknown) {
           let message = 'Unknown error during file copy.';
-          let status = 500;
           if (axios.isAxiosError(err)) {
              console.error(`[API /github/copy-files] Axios error putting file ${filePath} to target branch:`, err.response?.data || err.message);
              message = `Failed to update target: ${err.response?.data?.message || err.message}`;
-             status = err.response?.status || 500;
           } else if (err instanceof Error) {
              console.error(`[API /github/copy-files] Error putting file ${filePath} to target branch:`, err.message);
              message = `Failed to update target: ${err.message}`;
