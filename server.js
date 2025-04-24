@@ -1,6 +1,15 @@
 // server.js
 require('dotenv').config();
 const express = require('express');
+//debug
+// monkey-patch each HTTP method to log the path before registering it
+;['get','post','put','delete','patch','use','all'].forEach(method => {
+  const orig = app[method].bind(app);
+  app[method] = (path, ...handlers) => {
+    console.log(`> registering route: [${method.toUpperCase()}]`, path);
+    return orig(path, ...handlers);
+  };
+});
 const next    = require('next');
 const cors = require('cors');
 const axios = require('axios');
