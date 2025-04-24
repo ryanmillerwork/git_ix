@@ -480,7 +480,7 @@ export default function Header() {
 
     try {
       console.log("--- Sending Create Branch Request ---");
-      const response = await axios.post('/api/create-branch', {
+      const response = await axios.post('/api/github/create-branch', {
         username: selectedUser, // Send current user/pass for validation
         password: password,
         newBranchName: newBranchName,
