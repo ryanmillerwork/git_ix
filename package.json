@@ -3,11 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    // start the custom server (which will handle both API and Next.js pages)
     "dev":   "NODE_ENV=development node server.js",
-    // build only the front-end bundle
     "build": "next build",
-    // launch the same server in production mode
     "start": "NODE_ENV=production node server.js",
     "lint":  "next lint"
   },
