@@ -18,7 +18,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import FileCopyIcon from '@mui/icons-material/FileCopy';
 import PasteIcon from '@mui/icons-material/ContentPaste';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import { useEditorContext } from '@/app/contexts/EditorContext';
+import { useEditorContext } from '@/contexts/EditorContext';
 
 interface TreeNode {
   id: string;
@@ -29,24 +29,36 @@ interface TreeNode {
   sha?: string;
 }
 
-const StyledTreeItemRoot = styled(TreeItem)(({ theme }) => ({
-  // Add styles if needed
-}));
-
+// Custom TreeItem component with direct styling
 const StyledTreeItem = React.forwardRef(function StyledTreeItem(
+  // Use TreeItemProps directly
   props: TreeItemProps,
   ref: React.Ref<HTMLLIElement>,
 ) {
-  const theme = useTheme();
-  const { 
-    ...other 
-  } = props;
+  // Destructure props
+  const { nodeId, label, children, ...other } = props;
 
   return (
-    <StyledTreeItemRoot
-      {...other}
+    <TreeItem
+      nodeId={nodeId} // Pass nodeId explicitly
+      label={label}   // Pass label explicitly
       ref={ref}
-    />
+      sx={{ // Apply styles directly using the sx prop
+        // Add custom styles here if desired
+        // Example:
+        // color: 'text.secondary',
+        // '&:hover > .MuiTreeItem-content': {
+        //   backgroundColor: 'action.hover',
+        // },
+        // '&.Mui-focused > .MuiTreeItem-content, &.Mui-selected > .MuiTreeItem-content, &.Mui-selected.Mui-focused > .MuiTreeItem-content': {
+        //   backgroundColor: 'action.selected',
+        //   color: 'primary.contrastText',
+        // },
+      }}
+      {...other} // Spread any remaining props
+    >
+      {children} {/* Render children */} 
+    </TreeItem>
   );
 });
 
@@ -86,7 +98,7 @@ export default function FileDrawer() {
   const {
     folderStructure = [],
     selectedBranch,
-    fetchFileContent,
+    loadFileContent,
     isLoading: isContextLoading,
     fetchFolderStructure,
     credentials,
@@ -100,7 +112,29 @@ export default function FileDrawer() {
   };
 
   // --- Tree Event Handlers ---
-  // ... existing code ...
+  const handleNodeSelect = (node: TreeNode) => {
+    console.log("Node selected:", node);
+    if (node.type === 'blob') {
+      // If it's a file, load its content using the context function
+      if (loadFileContent) {
+          loadFileContent(node.path);
+      }
+      // Optionally update selected file state if needed
+      // updateSelectedFile(node.id); // Assuming updateSelectedFile exists in context
+    } else {
+      // If it's a folder, toggle its expansion
+      setExpandedItems((prevExpanded) =>
+        prevExpanded.includes(node.id)
+          ? prevExpanded.filter((id) => id !== node.id)
+          : [...prevExpanded, node.id]
+      );
+    }
+  };
+
+  const handleToggle = (event: React.SyntheticEvent, nodeIds: string[]) => {
+    // ... existing code ...
+  };
+
   const handleAddFileSubmit = async () => {
     if (addFilePath !== null && newFileName && !isLoadingAddFile && selectedBranch && fetchFolderStructure) {
       setIsLoadingAddFile(true);
@@ -120,7 +154,7 @@ export default function FileDrawer() {
       setAddFilePath(null);
     }
   };
-  // ... existing code ...
+
   const handleAddFolderSubmit = async () => {
     if (addFolderPath !== null && newFolderName && !isLoadingAddFolder && selectedBranch && fetchFolderStructure) {
       setIsLoadingAddFolder(true);
@@ -140,7 +174,7 @@ export default function FileDrawer() {
       setAddFolderPath(null);
     }
   };
-  // ... existing code ...
+
   const handleRenameSubmit = async () => {
     if (renameNode && newName && newName !== renameNode.name && !isLoadingRename && selectedBranch && fetchFolderStructure) {
       setIsLoadingRename(true);
@@ -160,7 +194,7 @@ export default function FileDrawer() {
       setNewName('');
     }
   };
-  // ... existing code ...
+
   const handleDeleteConfirm = async () => {
     if (nodeToDelete && !isLoadingDelete && selectedBranch && fetchFolderStructure) {
       setIsLoadingDelete(true);
@@ -188,7 +222,6 @@ export default function FileDrawer() {
       setExpandedItems(prev => prev.filter(id => id !== deletedNodeId));
     }
   };
-  // ... existing code ...
 
   // --- Render Logic ---
   const renderTree = (nodes: TreeNode[]) => (

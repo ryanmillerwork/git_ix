@@ -17,6 +17,16 @@ interface Branch {
 // Type for backend status
 type BackendStatus = 'checking' | 'online' | 'offline';
 
+// Define TreeNode structure (needed by Drawer)
+interface TreeNode {
+    id: string;
+    name: string;
+    type: 'blob' | 'tree';
+    path: string;
+    children?: TreeNode[];
+    sha?: string; // Optional: SHA for files/folders
+}
+
 // Define the shape of the context data
 interface EditorContextType {
     currentFilePath: string | null;
@@ -42,6 +52,13 @@ interface EditorContextType {
     backendStatus: BackendStatus;
     checkBackendHealth: () => Promise<void>;
     addRetryAction: (id: string, action: () => Promise<void>) => void;
+
+    // Added for Drawer
+    folderStructure: TreeNode[];
+    isLoadingFolderStructure: boolean;
+    fetchFolderStructure: (branch: string) => Promise<void>;
+    credentials: { githubToken?: string } | null;
+    updateCredentials: (token: string | null) => void;
 }
 
 const EditorContext = createContext<EditorContextType | undefined>(undefined);
@@ -60,6 +77,11 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const [branchStateCounter, setBranchStateCounter] = useState<number>(0);
     const [backendStatus, setBackendStatus] = useState<BackendStatus>('checking');
     const [pendingRetryActions, setPendingRetryActions] = useState<({ id: string, action: () => Promise<void> })[]>([]);
+
+    // Added state for Drawer
+    const [folderStructure, setFolderStructure] = useState<TreeNode[]>([]);
+    const [isLoadingFolderStructure, setIsLoadingFolderStructure] = useState<boolean>(false);
+    const [credentials, setCredentials] = useState<{ githubToken?: string } | null>(null);
 
     // Ref to track initial mount
     const isInitialMount = useRef(true);
@@ -128,6 +150,58 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []); // Dependencies managed carefully below
+
+    // --- Function to Fetch Folder Structure ---
+    const fetchFolderStructure = useCallback(async (branch: string) => {
+        if (!branch) {
+            setFolderStructure([]);
+            setError("Cannot fetch folder structure: No branch selected.");
+            return;
+        }
+        console.log(`[EditorContext] Fetching folder structure for branch: ${branch}`);
+        setIsLoadingFolderStructure(true);
+        setError(null);
+        try {
+            // Use relative URL for API route
+            const response = await fetch(`/api/github/folder-structure?branch=${encodeURIComponent(branch)}`);
+
+            if (!response.ok) {
+                let errorMsg = `HTTP error! status: ${response.status}`;
+                try {
+                    const errorData = await response.json();
+                    if (errorData.error) {
+                        errorMsg += `: ${errorData.error}`;
+                    }
+                } catch (parseError) { /* Ignore */ }
+                throw new Error(errorMsg);
+            }
+
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(data.error);
+            }
+
+            setFolderStructure(data.tree || []); // Assuming API returns { tree: [...] }
+
+        } catch (err: any) {
+            const errorMsg = err.message || "Failed to load folder structure";
+            console.error(`[EditorContext] ${errorMsg}`);
+            setError(errorMsg);
+            setFolderStructure([]); // Clear structure on error
+
+            // Optional: Add retry logic if needed, similar to loadFileContent
+            const isNetworkError = err.message.includes('Network Error') || err.message.includes('timeout') || err.message.includes('Failed to fetch');
+             if (backendStatusRef.current === 'offline' || isNetworkError) {
+                 const retryId = `load-structure-${branch}`;
+                 console.log(`[EditorContext] Backend offline or network error loading folder structure. Queuing action ${retryId} for retry.`);
+                 addRetryAction(retryId, () => fetchFolderStructure(branch));
+             }
+             checkBackendHealth(); // Check health if fetch fails
+
+        } finally {
+            setIsLoadingFolderStructure(false);
+        }
+    }, [addRetryAction, checkBackendHealth]); // Dependencies
 
     const loadFileContent = useCallback(async (filePath: string | null, branchOverride?: string | null) => {
         if (!filePath) {
@@ -301,6 +375,12 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [backendStatus, checkBackendHealth]); // Dependencies remain the same
 
+    // Add updater for credentials
+    const updateCredentials = useCallback((token: string | null) => {
+        console.log("[EditorContext] Updating credentials token."); // Avoid logging the token itself
+        setCredentials(token ? { githubToken: token } : null);
+    }, []);
+
     const contextValue: EditorContextType = {
         currentFilePath,
         currentFileContent,
@@ -325,6 +405,11 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         backendStatus,
         checkBackendHealth,
         addRetryAction,
+        folderStructure,
+        isLoadingFolderStructure,
+        fetchFolderStructure,
+        credentials,
+        updateCredentials,
     };
 
     return (
