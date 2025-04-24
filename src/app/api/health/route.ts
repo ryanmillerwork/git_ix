@@ -1,5 +1,3 @@
-console.log('Loading /api/health/route.ts'); // Added for debugging
-
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic'; // Ensure this route is always executed dynamically
@@ -22,4 +20,4 @@ export async function GET() {
     }
     return NextResponse.json({ error: message }, { status: 500 });
   }
-}
+} 
