@@ -4,8 +4,8 @@ import React, { createContext, useState, useContext, ReactNode, useCallback, use
 import axios from 'axios'; // Import axios
 
 // Base URL for API calls
-// Explicitly set based on user confirmation
-const API_BASE_URL = 'http://qpcs-server:3000';
+// Commented out as API calls should use relative paths for Next.js API routes
+// const API_BASE_URL = 'http://qpcs-server:3000';
 
 // Re-use Branch interface (or define centrally)
 interface Branch {
@@ -225,7 +225,8 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setIsLoading(true);
         setError(null);
         try {
-            const url = `${API_BASE_URL}/file-contents?path=${encodeURIComponent(filePath)}&branch=${encodeURIComponent(branchToLoad)}`;
+            // Use relative path for the API route
+            const url = `/api/github/file-contents?path=${encodeURIComponent(filePath)}&branch=${encodeURIComponent(branchToLoad)}`;
             const response = await fetch(url);
 
             if (!response.ok) {
