@@ -332,6 +332,18 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         backendStatus,
         checkBackendHealth,
         addRetryAction,
+        renameItem: async (path, newName) => {
+          console.warn("renameItem not implemented:", path, newName);
+        },
+        deleteItem: async (path, name) => {
+          console.warn("deleteItem not implemented:", path, name);
+        },
+        addFile: async (path, fileName) => {
+          console.warn("addFile not implemented:", path, fileName);
+        },
+        addFolder: async (path, folderName) => {
+          console.warn("addFolder not implemented:", path, folderName);
+        },
     };
 
     return (
