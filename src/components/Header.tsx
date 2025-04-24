@@ -184,9 +184,9 @@ export default function Header() {
     let isMounted = true; 
     setLoadingBranches(true);
     try {
-        const response = await axios.get<Branch[]>('/api/branches');
+        const response = await axios.get<{ branches: Branch[] }>('/api/branches');
         if (isMounted) {
-            const activeBranches = filterRetiredBranches(response.data);
+            const activeBranches = filterRetiredBranches(response.data.branches || []);
             const mainBranch = activeBranches.find(b => b.name === 'main');
             const otherBranches = activeBranches.filter(b => b.name !== 'main');
             const sortedBranches = mainBranch ? [mainBranch, ...otherBranches] : activeBranches;
