@@ -1,12 +1,24 @@
 "use client";
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
 import {
-  Drawer, Box, List,
+  Drawer, Box, List, ListItemButton, ListItemIcon, 
+  Typography, Divider, IconButton, Menu, MenuItem, Dialog, DialogActions, 
+  DialogContent, DialogContentText, DialogTitle, TextField, Button, Snackbar,
+  Alert, CircularProgress, styled, useTheme
 } from '@mui/material';
-import { useSnackbar } from 'notistack';
-import { useEditorContext } from '@/contexts/EditorContext';
-import { TreeItem } from '@mui/x-tree-view/TreeItem';
 import { TreeView } from '@mui/x-tree-view/TreeView';
+import { TreeItem, TreeItemProps } from '@mui/x-tree-view/TreeItem';
+import { useSnackbar } from 'notistack';
+import FolderIcon from '@mui/icons-material/Folder';
+import DescriptionIcon from '@mui/icons-material/Description';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import AddIcon from '@mui/icons-material/Add';
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
+import EditIcon from '@mui/icons-material/Edit';
+import FileCopyIcon from '@mui/icons-material/FileCopy';
+import PasteIcon from '@mui/icons-material/ContentPaste';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import { useEditorContext } from '@/contexts/EditorContext';
 
 interface TreeNode {
   id: string;
@@ -17,145 +29,218 @@ interface TreeNode {
   sha?: string;
 }
 
+// Custom TreeItem component with direct styling
+const StyledTreeItem = React.forwardRef(function StyledTreeItem(
+  // Use TreeItemProps directly
+  props: TreeItemProps,
+  ref: React.Ref<HTMLLIElement>,
+) {
+  // Destructure props
+  const { nodeId, label, children, ...other } = props;
+
+  return (
+    <TreeItem
+      nodeId={nodeId} // Pass nodeId explicitly
+      label={label}   // Pass label explicitly
+      ref={ref}
+      sx={{ // Apply styles directly using the sx prop
+        // Add custom styles here if desired
+        // Example:
+        // color: 'text.secondary',
+        // '&:hover > .MuiTreeItem-content': {
+        //   backgroundColor: 'action.hover',
+        // },
+        // '&.Mui-focused > .MuiTreeItem-content, &.Mui-selected > .MuiTreeItem-content, &.Mui-selected.Mui-focused > .MuiTreeItem-content': {
+        //   backgroundColor: 'action.selected',
+        //   color: 'primary.contrastText',
+        // },
+      }}
+      {...other} // Spread any remaining props
+    >
+      {children} {/* Render children */} 
+    </TreeItem>
+  );
+});
+
 export default function FileDrawer() {
   const drawerWidth = 240;
   const { enqueueSnackbar } = useSnackbar();
 
+  const [treeVisible, setTreeVisible] = useState(true);
+
+  const [expandedItems, setExpandedItems] = useState<string[]>([]);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
 
+  const [contextMenu, setContextMenu] = useState<{ mouseX: number; mouseY: number; node: TreeNode | null } | null>(null);
+
+  const [addFileDialogOpen, setAddFileDialogOpen] = useState(false);
+  const [addFilePath, setAddFilePath] = useState<string | null>(null);
   const [newFileName, setNewFileName] = useState('');
   const [isLoadingAddFile, setIsLoadingAddFile] = useState(false);
-  const [addFilePath, setAddFilePath] = useState<string | null>(null);
-  const [addFileDialogOpen, setAddFileDialogOpen] = useState(false);
 
+  const [addFolderDialogOpen, setAddFolderDialogOpen] = useState(false);
+  const [addFolderPath, setAddFolderPath] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [isLoadingAddFolder, setIsLoadingAddFolder] = useState(false);
-  const [addFolderPath, setAddFolderPath] = useState<string | null>(null);
-  const [addFolderDialogOpen, setAddFolderDialogOpen] = useState(false);
 
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameNode, setRenameNode] = useState<TreeNode | null>(null);
   const [newName, setNewName] = useState('');
   const [isLoadingRename, setIsLoadingRename] = useState(false);
-  const [renameNode, setRenameNode] = useState<TreeNode | null>(null);
-  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
 
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [nodeToDelete, setNodeToDelete] = useState<TreeNode | null>(null);
   const [isLoadingDelete, setIsLoadingDelete] = useState(false);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+
+  const [clipboard, setClipboard] = useState<{ node: TreeNode, action: 'copy' } | null>(null);
+  const [isLoadingPaste, setIsLoadingPaste] = useState(false);
 
   const {
     folderStructure = [],
     selectedBranch,
     loadFileContent,
+    isLoading: isContextLoading,
     fetchFolderStructure,
     credentials,
   } = useEditorContext() || {};
 
+  // --- Helper Functions ---
+  const getParentPath = (filePath: string): string => {
+    const segments = filePath.split('/').filter(Boolean);
+    segments.pop(); // Remove filename or last folder name
+    return segments.join('/');
+  };
+
   // --- Tree Event Handlers ---
-  const handleNodeSelect = (event: React.SyntheticEvent, nodeId: string) => {
-    // Find the node in the structure based on nodeId
-    // This requires a helper function to search the tree
-    const findNode = (nodes: TreeNode[], id: string): TreeNode | null => {
-      for (const node of nodes) {
-        if (node.id === id) return node;
-        if (node.children) {
-          const found = findNode(node.children, id);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-
-    const node = findNode(folderStructure, nodeId);
-
-    if (node) {
-      console.log("Node selected:", node);
-      if (node.type === 'blob') {
-        if (loadFileContent) {
+  const handleNodeSelect = (node: TreeNode) => {
+    console.log("Node selected:", node);
+    if (node.type === 'blob') {
+      // If it's a file, load its content using the context function
+      if (loadFileContent) {
           loadFileContent(node.path);
-        }
-        setSelectedFileId(node.id); // Track selected file
-      } else {
-        // Folder click - expand/collapse is handled by TreeView internally now
-        console.log("Folder selected/toggled:", node.name);
       }
+      // Optionally update selected file state if needed
+      // updateSelectedFile(node.id); // Assuming updateSelectedFile exists in context
     } else {
-      console.warn("Selected node not found in structure:", nodeId);
+      // If it's a folder, toggle its expansion
+      setExpandedItems((prevExpanded) =>
+        prevExpanded.includes(node.id)
+          ? prevExpanded.filter((id) => id !== node.id)
+          : [...prevExpanded, node.id]
+      );
     }
   };
 
-  // --- API Call Helper ---
-  const callApi = async (
-      endpoint: string,
-      body: Record<string, unknown>,
-      method: 'POST' | 'GET' | 'PUT' | 'DELETE' = 'POST',
-      credentials: { githubToken?: string } | null,
-      enqueueSnackbar: (message: string, options: { variant: 'success' | 'error' | 'warning' | 'info' }) => void
-  ): Promise<{ success: boolean; data?: unknown; error?: string }> => {
-    try {
-      const token = credentials?.githubToken;
-      if (!token) {
-          enqueueSnackbar('GitHub token is missing.', { variant: 'error' });
-          return { success: false, error: 'Authentication token not found.' };
-      }
+  const handleToggle = (event: React.SyntheticEvent, nodeIds: string[]) => {
+    // ... existing code ...
+  };
 
-      const response = await fetch(endpoint, {
-          method: method,
-          headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`,
-          },
-          ...(method !== 'GET' && { body: JSON.stringify(body) })
-      });
+  const handleAddFileSubmit = async () => {
+    if (addFilePath !== null && newFileName && !isLoadingAddFile && selectedBranch && fetchFolderStructure) {
+      setIsLoadingAddFile(true);
+      const result = await callApi('/api/github/add-file', {
+        branch: selectedBranch,
+        path: addFilePath,
+        filename: newFileName
+      }, 'POST', credentials, enqueueSnackbar); // Pass creds & snackbar
 
-      const result = await response.json();
+      setAddFileDialogOpen(false);
+       if (result.success) {
+           enqueueSnackbar(`File '${newFileName}' added successfully.`, { variant: 'success' });
+           fetchFolderStructure(selectedBranch); // Refresh structure
+       } // Error handled by callApi
+      setIsLoadingAddFile(false);
+      setNewFileName('');
+      setAddFilePath(null);
+    }
+  };
 
-      if (!response.ok) {
-          const errorMessage = result?.message ?? result?.error ?? 'An unknown API error occurred.';
-          enqueueSnackbar(`API Error: ${errorMessage}`, { variant: 'error' });
-          return { success: false, error: errorMessage };
-      }
+  const handleAddFolderSubmit = async () => {
+    if (addFolderPath !== null && newFolderName && !isLoadingAddFolder && selectedBranch && fetchFolderStructure) {
+      setIsLoadingAddFolder(true);
+      const result = await callApi('/api/github/add-folder', {
+          branch: selectedBranch,
+          path: addFolderPath || '', // Root path if null
+          foldername: newFolderName
+      }, 'POST', credentials, enqueueSnackbar); // Pass creds & snackbar
 
-      return { success: true, data: result };
+      setAddFolderDialogOpen(false);
+       if (result.success) {
+           enqueueSnackbar(`Folder '${newFolderName}' added successfully.`, { variant: 'success' });
+           fetchFolderStructure(selectedBranch); // Refresh structure
+       } // Error handled by callApi
+      setIsLoadingAddFolder(false);
+      setNewFolderName('');
+      setAddFolderPath(null);
+    }
+  };
 
-    } catch (error: unknown) {
-      console.error(`API call to ${endpoint} failed:`, error);
-      let message = 'Network error or failed to parse response.';
-      if (error instanceof Error) {
-          message = error.message;
-      }
-      enqueueSnackbar(`Error: ${message}`, { variant: 'error' });
-      return { success: false, error: message };
+  const handleRenameSubmit = async () => {
+    if (renameNode && newName && newName !== renameNode.name && !isLoadingRename && selectedBranch && fetchFolderStructure) {
+      setIsLoadingRename(true);
+      const result = await callApi('/api/github/rename-item', {
+          branch: selectedBranch,
+          originalPath: renameNode.path,
+          newName: newName,
+      }, 'POST', credentials, enqueueSnackbar); // Pass creds & snackbar
+
+      setRenameDialogOpen(false);
+       if (result.success) {
+           enqueueSnackbar(`Renamed to '${newName}' successfully.`, { variant: 'success' });
+           fetchFolderStructure(selectedBranch); // Refresh structure
+       } // Error handled by callApi
+      setIsLoadingRename(false);
+      setRenameNode(null);
+      setNewName('');
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (nodeToDelete && !isLoadingDelete && selectedBranch && fetchFolderStructure) {
+      setIsLoadingDelete(true);
+      // Use generic /item endpoint with DELETE method
+      const result = await callApi('/api/github/item', { // Corrected endpoint
+          branch: selectedBranch,
+          path: nodeToDelete.path
+      }, 'DELETE', credentials, enqueueSnackbar); // Pass creds & snackbar
+
+      setDeleteConfirmOpen(false);
+      if (result.success) {
+        enqueueSnackbar(`'${nodeToDelete.name}' deleted successfully.`, { variant: 'success' });
+        // If the deleted item was the currently selected file, clear the selection
+        if (selectedFileId === nodeToDelete.id) {
+          setSelectedFileId(null);
+          // Optionally call updateSelectedFile(null, null) if context needs update
+        }
+        fetchFolderStructure(selectedBranch); // Refresh structure
+      } // Error handled by callApi
+      const deletedNodeId = nodeToDelete.id; // Capture ID before nulling
+      setNodeToDelete(null);
+      setIsLoadingDelete(false);
+
+      // Optional: If the deleted node was expanded, remove it from expandedItems
+      setExpandedItems(prev => prev.filter(id => id !== deletedNodeId));
     }
   };
 
   // --- Render Logic ---
   const renderTree = (nodes: TreeNode[]) => (
     nodes.map((node) => (
-      // Use standard TreeItem directly
-      <TreeItem
-        key={node.id}       // React key
-        nodeId={node.id}    // For TreeView identification
-        itemId={node.id}    // Required by TreeItem
-        label={node.name}   // Display name
-        // onClick prop is not standard for TreeItem, selection is handled by TreeView's onNodeSelect
+      <StyledTreeItem
+        key={node.id}
+        nodeId={node.id}
+        label={node.name}
+        onClick={() => handleNodeSelect(node)}
       >
-        {/* Recursively render children */} 
-        {Array.isArray(node.children) ? renderTree(node.children) : null}
-      </TreeItem>
+        {node.children && renderTree(node.children)}
+      </StyledTreeItem>
     ))
   );
-
-  // Need state for expanded nodes for the TreeView component
-  const [expanded, setExpanded] = useState<string[]>([]);
-
-  const handleToggle = (event: React.SyntheticEvent, nodeIds: string[]) => {
-    setExpanded(nodeIds);
-  };
 
   return (
     <Drawer
       variant="permanent"
-      open={true} // Assuming drawer is always open
+      open={treeVisible}
       sx={{
         width: drawerWidth,
         flexShrink: 0,
@@ -165,26 +250,76 @@ export default function FileDrawer() {
         },
       }}
     >
-      <Box sx={{ overflow: 'auto', p: 1 }}>
-         {/* Replace List with TreeView */}
-         <TreeView
-            aria-label="file system navigator"
-            defaultCollapseIcon={/* Add appropriate icon e.g., <ExpandMoreIcon /> */}
-            defaultExpandIcon={/* Add appropriate icon e.g., <ChevronRightIcon /> */}
-            sx={{ height: '100%', flexGrow: 1, maxWidth: 400, overflowY: 'auto' }}
-            expanded={expanded} // Control expanded state
-            onNodeToggle={handleToggle} // Handle expansion changes
-            onNodeSelect={handleNodeSelect} // Handle node selection (file click)
-          >
-            {folderStructure && folderStructure.length > 0 ? (
-                renderTree(folderStructure)
-            ) : (
-                <Box sx={{ p: 2, textAlign: 'center', color: 'text.secondary' }}>
-                    Select a branch to view files.
-                </Box>
-            )}
-         </TreeView>
+      <Box sx={{ overflow: 'auto' }}>
+        <List>
+          {renderTree(folderStructure)}
+        </List>
       </Box>
     </Drawer>
   );
 }
+
+// --- Generic API Call Helper ---
+// Place this outside the component definition
+const callApi = async (
+    endpoint: string,
+    body: Record<string, any>, // Use Record<string, any> for flexibility
+    method: 'POST' | 'GET' | 'PUT' | 'DELETE' = 'POST',
+    credentials: { githubToken?: string } | null, // Expecting object with optional token
+    enqueueSnackbar: (message: string, options: { variant: 'success' | 'error' | 'warning' | 'info' }) => void // Snackbar function type
+): Promise<{ success: boolean; data?: any; error?: string }> => {
+
+    // Added check for credentials within the helper
+    if (!credentials?.githubToken) {
+        console.error('API Call Error: Missing GitHub token.');
+        enqueueSnackbar('GitHub token not configured.', { variant: 'error' });
+        return { success: false, error: 'Missing credentials' };
+    }
+
+    try {
+        const response = await fetch(endpoint, {
+            method,
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${credentials.githubToken}`, // Use token
+            },
+            // Only include body for relevant methods
+            body: (method === 'POST' || method === 'PUT') ? JSON.stringify(body) : undefined,
+        });
+
+        // Attempt to parse JSON, handle cases where body might be empty (e.g., 204 No Content)
+        let result: any;
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.indexOf("application/json") !== -1) {
+             if (response.status !== 204) { // Don't parse if No Content
+                result = await response.json();
+             } else {
+                result = { message: 'Operation successful (No Content)' }; // Or some default success object
+             }
+        } else {
+            // Handle non-JSON responses if necessary, e.g., plain text error messages
+            if (!response.ok) {
+                result = { error: `Server returned status ${response.status}` };
+            } else {
+                result = { message: 'Operation successful (Non-JSON response)' }; // Or handle based on status
+            }
+        }
+
+        if (!response.ok) {
+            console.error(`API Error (${response.status}):`, result);
+            // Use error message from response if available, otherwise generic message
+            const errorMessage = result?.error || result?.message || `API request failed (${response.status})`;
+            enqueueSnackbar(errorMessage, { variant: 'error' });
+            return { success: false, error: errorMessage };
+        }
+
+        // Success: return data (which might be empty/message for 204)
+        return { success: true, data: result };
+
+    } catch (error) {
+        console.error('API Call failed:', error);
+        const message = error instanceof Error ? error.message : 'An unknown error occurred during the API call.';
+        enqueueSnackbar(`Network or parsing error: ${message}`, { variant: 'error' });
+        return { success: false, error: message }; // Indicate failure
+    }
+};

@@ -55,7 +55,7 @@ export async function POST(request: Request) {
         error: 'Missing required fields: username, password, branch, targetDirectory, and a non-empty files array are required.',
     }, { status: 400 });
   }
-  if (!files.every((f: { name: string, content: string }) => typeof f.name === 'string' && typeof f.content === 'string' && f.name && !hasInvalidNameChars(f.name))) {
+  if (!files.every((f: any) => typeof f.name === 'string' && typeof f.content === 'string' && f.name && !hasInvalidNameChars(f.name))) {
       console.log('[API /github/upload-files] Validation failed: Invalid file data in array.');
        return NextResponse.json({ error: 'Invalid file data in array. Each file must have a valid name (no slashes) and base64 content.' }, { status: 400 });
   }
