@@ -3,33 +3,43 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+    // start the custom server (which will handle both API and Next.js pages)
+    "dev":   "NODE_ENV=development node server.js",
+    // build only the front-end bundle
     "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    // launch the same server in production mode
+    "start": "NODE_ENV=production node server.js",
+    "lint":  "next lint"
   },
   "dependencies": {
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.0",
-    "@mui/icons-material": "^7.0.1",
-    "@mui/material": "^7.0.1",
+    "@emotion/react":       "^11.14.0",
+    "@emotion/styled":      "^11.14.0",
+    "@mui/icons-material":  "^7.0.1",
+    "@mui/material":        "^7.0.1",
     "@mui/material-nextjs": "^7.0.0",
-    "@mui/x-data-grid": "^7.28.3",
-    "@mui/x-tree-view": "^7.28.1",
-    "ace-builds": "^1.39.1",
-    "axios": "^1.8.4",
-    "next": "15.2.4",
-    "react": "^19.0.0",
-    "react-ace": "^14.0.1",
-    "react-dom": "^19.0.0"
+    "@mui/x-data-grid":     "^7.28.3",
+    "@mui/x-tree-view":     "^7.28.1",
+    "ace-builds":           "^1.39.1",
+    "axios":                "^1.8.4",
+    "bcrypt":               "^5.1.0",
+    "cors":                 "^2.8.5",
+    "diff":                 "^5.1.0",
+    "dotenv":               "^16.0.3",
+    "express":              "^4.18.2",
+    "next":                 "15.2.4",
+    "pg":                   "^8.8.0",
+    "react":                "^19.0.0",
+    "react-ace":            "^14.0.1",
+    "react-dom":            "^19.0.0",
+    "semver":               "^7.5.4"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
-    "@types/node": "^20",
-    "@types/react": "^19",
+    "@types/node":     "^20",
+    "@types/react":    "^19",
     "@types/react-dom": "^19",
-    "eslint": "^9",
+    "eslint":          "^9",
     "eslint-config-next": "15.2.4",
-    "typescript": "^5"
+    "typescript":       "^5"
   }
 }
