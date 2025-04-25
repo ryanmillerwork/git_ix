@@ -147,23 +147,27 @@ export async function POST(request: Request) {
             tempBranchSha = checkResp.data.sha;
             console.log(`[API /github/copy-files][PR Flow] Target file ${filePath} exists on temp branch. SHA: ${tempBranchSha}`);
         } catch (err: unknown) {
-            if (axios.isAxiosError(err) && err.response?.status !== 404) { // Ignore 404
-                console.error(`[API /github/copy-files][PR Flow] Error checking target file ${filePath} on temp branch:`, err.response?.data || err.message);
-                copyResults.push({ path: filePath, status: 'error', reason: `Error checking target on temp branch: ${err.response?.data?.message || err.message}` });
-                prFlowCopySuccess = false;
-                continue; // Skip this file if check fails
-            } else if (err instanceof Error) {
-                console.error(`[API /github/copy-files][PR Flow] Error checking target file ${filePath} on temp branch:`, err.message);
-                copyResults.push({ path: filePath, status: 'error', reason: `Error checking target on temp branch: ${err.message}` });
-                prFlowCopySuccess = false;
-                continue;
-            } else if (!(axios.isAxiosError(err) && err.response?.status === 404)) { // Log unknown non-404 errors
-                console.error(`[API /github/copy-files][PR Flow] Unknown error checking target file ${filePath} on temp branch:`, err);
-                copyResults.push({ path: filePath, status: 'error', reason: 'Unknown error checking target file on temp branch.' });
-                prFlowCopySuccess = false;
-                continue;
-            }
-            console.log(`[API /github/copy-files][PR Flow] Target file ${filePath} does not exist on temp branch. Will create.`);
+             // A 404 error here is EXPECTED if the file doesn't exist on the temp branch yet.
+             // Only treat other errors as failures for this step.
+             if (axios.isAxiosError(err) && err.response?.status === 404) {
+                 console.log(`[API /github/copy-files][PR Flow] Target file ${filePath} does not exist on temp branch. Will create.`);
+                 // Do nothing, tempBranchSha remains null - proceed to PUT
+             } else { 
+                 // Handle actual errors during the check
+                 let checkErrorMsg = 'Unknown error checking target file on temp branch.';
+                 if (axios.isAxiosError(err)) {
+                     checkErrorMsg = `Error checking target on temp branch: ${err.response?.data?.message || err.message}`;
+                     console.error(`[API /github/copy-files][PR Flow] Axios error checking target file ${filePath} on temp branch:`, err.response?.data || err.message);
+                 } else if (err instanceof Error) {
+                     checkErrorMsg = `Error checking target on temp branch: ${err.message}`;
+                     console.error(`[API /github/copy-files][PR Flow] Error checking target file ${filePath} on temp branch:`, err.message);
+                 } else {
+                     console.error(`[API /github/copy-files][PR Flow] Unknown error checking target file ${filePath} on temp branch:`, err);
+                 }
+                 copyResults.push({ path: filePath, status: 'error', reason: checkErrorMsg });
+                 prFlowCopySuccess = false;
+                 continue; // Skip this file if the check fails for reasons other than 404
+             }
         }
 
         // 4c. Prepare payload and PUT file to temp branch
