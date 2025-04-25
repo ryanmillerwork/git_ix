@@ -65,26 +65,27 @@ export async function POST(request: Request) {
     const tempBranchName = `copy-to-main-${username}-${timestamp}`;
     console.log(`[API /github/copy-files] Generated temporary branch name: ${tempBranchName}`);
 
-    // 2. Get the SHA of the source branch's HEAD
-    let sourceBranchSha: string;
+    // 2. Get the SHA of the **main** branch's HEAD
+    let mainBranchSha: string;
     try {
-        const branchInfoUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches/${encodeURIComponent(source_branch)}`;
+        console.log(`[API /github/copy-files] Getting main branch SHA to create temporary branch from.`);
+        const branchInfoUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches/main`; // Fetch main branch info
         const branchInfoResp = await axios.get(branchInfoUrl, { headers: githubAuthHeaders });
-        sourceBranchSha = branchInfoResp.data.commit.sha;
-        console.log(`[API /github/copy-files] Source branch '${source_branch}' SHA: ${sourceBranchSha}`);
+        mainBranchSha = branchInfoResp.data.commit.sha;
+        console.log(`[API /github/copy-files] Main branch SHA: ${mainBranchSha}`);
     } catch (err: any) {
-        console.error(`[API /github/copy-files] Error getting source branch SHA for '${source_branch}':`, err.response?.data || err.message);
-        return NextResponse.json({ error: `Failed to get source branch details: ${err.response?.data?.message || err.message}` }, { status: 500 });
+        console.error(`[API /github/copy-files] Error getting main branch SHA:`, err.response?.data || err.message);
+        return NextResponse.json({ error: `Failed to get main branch details: ${err.response?.data?.message || err.message}` }, { status: 500 });
     }
 
-    // 3. Create the temporary branch from the source branch SHA
+    // 3. Create the temporary branch from the **main** branch SHA
     try {
         const createBranchUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/refs`;
         await axios.post(createBranchUrl, {
             ref: `refs/heads/${tempBranchName}`,
-            sha: sourceBranchSha
+            sha: mainBranchSha // Use the main branch SHA
         }, { headers: githubAuthHeaders });
-        console.log(`[API /github/copy-files] Successfully created temporary branch '${tempBranchName}'`);
+        console.log(`[API /github/copy-files] Successfully created temporary branch '${tempBranchName}' from main branch SHA.`);
     } catch (err: any) {
         console.error(`[API /github/copy-files] Error creating temporary branch '${tempBranchName}':`, err.response?.data || err.message);
          if (axios.isAxiosError(err) && err.response?.status === 422) {
