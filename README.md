@@ -65,7 +65,7 @@ Follow these steps to set up and run the `git_ix` application from scratch on a 
 **2. Clone the Repository:**
 
 ```bash
-git clone <your-repository-url> # Replace with the actual URL of this repo
+git clone https://github.com/ryanmillerwork/git_ix
 cd git_ix
 ```
 
