@@ -1,6 +1,6 @@
-# Git Interaction Explorer (git_ix)
+# Git Interaction (git_ix)
 
-`git_ix` is a web-based interface built with Next.js designed to interact with a specific GitHub repository. It allows users to browse repository contents, view file diffs, manage branches, and commit changes through a user-friendly UI. User access and permissions can potentially be managed via a PostgreSQL database integration.
+`git_ix` is a web-based interface built with Next.js designed to interact with a specific GitHub repository. It allows users to browse repository contents, view file diffs, manage branches, and commit changes through a user-friendly UI. User access and permissions are managed via a PostgreSQL database integration.
 
 ## Features
 
@@ -9,7 +9,10 @@
 *   **Branch Management:** Create, view, revert, and retire branches.
 *   **Committing:** Commit changes directly to the repository.
 *   **GitHub Integration:** Leverages the GitHub API for all repository operations.
-*   **User Management (via PostgreSQL):** Connects to a PostgreSQL database, likely for managing users and permissions (details depend on implementation in `src/lib/server/db.ts` and API routes like `src/app/api/users/`).
+*   **User Management & Permissions (via PostgreSQL):** 
+    *   Connects to a PostgreSQL database to manage users (`username`, `email`, hashed `password`).
+    *   Controls user access based on an `active` status flag.
+    *   Manages granular permissions per user via a `branch_permissions` array (text[]), restricting access to specific Git branches.
 
 ## API Endpoints
 
@@ -28,7 +31,7 @@ The application exposes several API endpoints under `/api/github/` to handle Git
 *   `/api/github/create-branch`, `/api/github/revert-branch`, `/api/github/retire-branch`: Branch lifecycle management.
 
 Other endpoints include:
-*   `/api/users`: Likely handles user authentication/management via the database.
+*   `/api/users`: Handles user creation (`POST /new`), activation/deactivation (`PUT /update-status`), retrieval of all users (`GET /all`), and retrieval of active user names (`GET /`).
 *   `/api/item`: Potentially related to specific item operations (needs further investigation).
 *   `/api/health`, `/api/ping`: System status checks.
 
@@ -100,16 +103,32 @@ DATABASE_URL="postgresql://gitix_user:your_password@localhost:5432/gitix_db" # A
 *   **Important:** Ensure your `GITHUB_TOKEN` has the necessary permissions (e.g., `repo` scope) to interact with the target repository.
 *   Adjust the `DATABASE_URL` if your PostgreSQL setup uses different credentials, host, or port.
 
-**5. Database Setup (If Applicable):**
+**5. Database Setup:**
 
-*Check if there are database migration scripts or setup instructions within the project (e.g., in `src/lib/server/db.ts` or a dedicated `migrations` folder). Run them if necessary.*
+The application requires a PostgreSQL database with a `users` table. You will need to create this table manually. Based on the API routes (`src/app/api/users/`), the table should have at least the following columns:
 
-**(Example - if using a tool like Prisma or a custom script):**
-```bash
-# npx prisma migrate dev # Example if using Prisma
-# npm run db:migrate # Example if there's a custom script
+*   `id`: Primary Key (e.g., SERIAL or UUID)
+*   `username`: TEXT or VARCHAR, UNIQUE, NOT NULL
+*   `email`: TEXT or VARCHAR, NULLABLE
+*   `password_hash`: TEXT or VARCHAR, NOT NULL (stores bcrypt hash)
+*   `branch_permissions`: TEXT[], NOT NULL, DEFAULT '{}' (stores an array of branch names the user can access)
+*   `active`: BOOLEAN, NOT NULL, DEFAULT false
+*   `created_at`: TIMESTAMP WITH TIME ZONE, DEFAULT CURRENT_TIMESTAMP
+
+Example SQL for table creation (adapt types/constraints as needed):
+```sql
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(255),
+    password_hash TEXT NOT NULL,
+    branch_permissions TEXT[] NOT NULL DEFAULT '{}',
+    active BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
 ```
-*(Currently, no specific migration process is identified. You might need to manually set up required tables based on the code in `src/lib/server/db.ts` or user-related API routes.)*
+
+*After creating the table, you might need an initial admin user or use the API (`/api/users/new`) to create users.*
 
 **6. Run the Development Server:**
 
@@ -136,18 +155,3 @@ To run the production server:
 ```bash
 npm start
 ```
-
-## Learn More About Next.js
-
-To learn more about the underlying framework, Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out the [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
