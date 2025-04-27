@@ -83,7 +83,7 @@ npm install
 Create a `.env` file in the root of the project directory:
 
 ```bash
-touch .env
+nano .env
 ```
 
 Add the following variables to the `.env` file, replacing the placeholder values with your actual configuration:
@@ -155,3 +155,20 @@ To run the production server:
 ```bash
 npm start
 ```
+
+## Frontend Code Organization
+
+The frontend is built using Next.js (App Router), React, and Material UI (MUI). State management for shared UI elements and editor state is handled via React Context (`src/contexts/EditorContext.tsx`).
+
+Key components include:
+
+*   **`src/app/layout.tsx` & `src/app/page.tsx`**: The main entry point and page layout. `page.tsx` orchestrates the main UI, including the Header, Drawer, and the main content area which contains the code editor and diff viewer.
+*   **`src/components/Header.tsx`**: Renders the top app bar. Handles branch selection, user selection/login (interacting with `EditorContext`), and provides access to modals for branch management (create, retire, revert) and user management.
+*   **`src/components/Drawer.tsx`**: Implements the collapsible left sidebar. Uses MUI `RichTreeView` to display the file/folder structure fetched via `EditorContext`. Handles file selection (updating `EditorContext`), context menu actions (add, rename, delete, copy, upload), and associated modals.
+*   **`src/contexts/EditorContext.tsx`**: Provides shared state across components, including:
+    *   Selected branch, user, current file path, and file content.
+    *   Functions for fetching folder structure and file content from the backend API.
+    *   Tracking of unsaved changes in the editor.
+    *   Backend health status and retry logic.
+*   **Code Editor (within `src/app/page.tsx`)**: Uses the `react-ace` library (`<AceEditor>`) to provide the text editing functionality. It displays the `currentFileContent` from `EditorContext` and updates the context when changes are made.
+*   **Diff Viewer (within `src/app/page.tsx`)**: Uses a diffing library (`diff`) to display differences between file versions in a modal.
