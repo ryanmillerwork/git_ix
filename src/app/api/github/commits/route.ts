@@ -101,9 +101,14 @@ export async function GET(request: Request) {
             const commitDate = commitDateStr ? new Date(commitDateStr) : new Date(); // Fallback to now if no date
             const commitMessage = commitData.message;
 
+            console.log(`[API /github/commits] Processing commit message: "${commitMessage}"`); // DEBUG LOG
+
             // Extract author from message "[author: username]"
             const authorMatch = commitMessage.match(/\[author:\s*([^\\]]+)\]/);
+            console.log(`[API /github/commits] authorMatch result: ${JSON.stringify(authorMatch)}`); // DEBUG LOG
+            
             const extractedAuthor = authorMatch ? authorMatch[1].trim() : (commit.author?.login || 'N/A'); // Fallback
+            console.log(`[API /github/commits] extractedAuthor: "${extractedAuthor}"`); // DEBUG LOG
 
             return {
                 id: sha, // Use commit SHA as the unique ID
