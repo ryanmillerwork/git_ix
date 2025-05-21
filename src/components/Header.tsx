@@ -690,7 +690,7 @@ export default function Header() {
       console.log(" Revert to Commit ID:", selectedCommitId);
 
       try {
-          const response = await axios.post('/api/revert-branch', {
+          const response = await axios.post('/api/github/revert-branch', {
               username: selectedUser,
               password: password,
               branchToRevert: revertTargetBranch,
