@@ -321,23 +321,26 @@ export async function POST(request: Request) {
         targetSha = checkResp.data.sha;
          console.log(`[API /github/copy-files][Direct] Target file ${filePath} exists. SHA: ${targetSha}`);
       } catch (err: unknown) {
-          if (axios.isAxiosError(err) && err.response?.status !== 404) { // Ignore 404
-             console.error(`[API /github/copy-files][Direct] Error checking target file ${filePath}:`, err.response?.data || err.message);
-                 copyResults.push({ path: filePath, status: 'error', reason: `Error checking target: ${err.response?.data?.message || err.message}` });
-                 overallSuccess = false;
-             continue; // Skip this file if check fails
-          } else if (err instanceof Error) {
-             console.error(`[API /github/copy-files][Direct] Error checking target file ${filePath}:`, err.message);
-             copyResults.push({ path: filePath, status: 'error', reason: `Error checking target: ${err.message}` });
-             overallSuccess = false;
-             continue;
-          } else if (!(axios.isAxiosError(err) && err.response?.status === 404)) { // Log unknown non-404 errors
-             console.error(`[API /github/copy-files][Direct] Unknown error checking target file ${filePath}:`, err);
-             copyResults.push({ path: filePath, status: 'error', reason: 'Unknown error checking target file.' });
-             overallSuccess = false;
-             continue;
+          if (axios.isAxiosError(err) && err.response?.status === 404) {
+              // This is the expected case: file does not exist on target branch.
+              console.log(`[API /github/copy-files][Direct] Target file ${filePath} does not exist on ${target_branch}. Will create.`);
+              // targetSha remains null, proceed to PUT for creation.
+          } else {
+              // Any other error during the target check is a problem.
+              let checkErrorMsg = 'Unknown error checking target file.';
+              if (axios.isAxiosError(err)) {
+                  checkErrorMsg = `Error checking target file ${filePath} on ${target_branch}: ${err.response?.data?.message || err.message}`;
+                  console.error(`[API /github/copy-files][Direct] Axios error checking target file:`, err.response?.data || err.message);
+              } else if (err instanceof Error) {
+                  checkErrorMsg = `Error checking target file ${filePath} on ${target_branch}: ${err.message}`;
+                  console.error(`[API /github/copy-files][Direct] Error checking target file:`, err.message);
+              } else {
+                  console.error(`[API /github/copy-files][Direct] Unknown error checking target file:`, err);
+              }
+              copyResults.push({ path: filePath, status: 'error', reason: checkErrorMsg });
+              overallSuccess = false;
+              continue; // Skip this file if the check fails for reasons other than 404
           }
-          console.log(`[API /github/copy-files][Direct] Target file ${filePath} does not exist. Will create.`);
       }
 
       // 3. Prepare payload and PUT file to target branch
