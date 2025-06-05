@@ -4,7 +4,7 @@ import { Typography, Box, Button, CircularProgress, Dialog, DialogActions, Dialo
 import { useEditorContext } from "@/contexts/EditorContext";
 import axios from 'axios';
 import { useTheme, createTheme, styled, alpha } from '@mui/material/styles';
-import { EditorProvider, EditorContext } from '@/contexts/EditorContext';
+import { EditorProvider } from '@/contexts/EditorContext';
 import Header from '@/components/Header';
 import AppDrawer from '@/components/Drawer';
 import EditorPane from '@/components/EditorPane';
@@ -34,32 +34,6 @@ ace.config.set("basePath", "/ace/");
 ace.config.set("modePath", "/ace/");
 ace.config.set("themePath", "/ace/");
 ace.config.set("workerPath", "/ace/");
-
-// ADD THIS USEEFFECT
-useEffect(() => {
-  const runTclIntExample = async () => {
-    try {
-      console.log("[Page Load] Calling /api/run-tclint-example...");
-      const response = await fetch('/api/run-tclint-example');
-      const data = await response.json();
-
-      if (!response.ok) {
-        console.error("[Page Load] API Error:", data.error, data.details);
-      } else {
-        console.log("[Page Load] tclint execution details:", data.message);
-        console.log("[Page Load] tclint stdout:", data.stdout);
-        if (data.stderr) {
-          console.warn("[Page Load] tclint stderr:", data.stderr);
-        }
-        console.log(`[Page Load] tclint exitCode: ${data.exitCode}`);
-      }
-    } catch (error) {
-      console.error("[Page Load] Failed to fetch or parse tclint example response:", error);
-    }
-  };
-
-  runTclIntExample();
-}, []); // Empty dependency array ensures this runs only once on mount
 
 // Helper to get Ace mode from file path
 const getModeForPath = (filePath: string | null): string => {
@@ -133,6 +107,31 @@ export default function Home() {
   const [isDiffing, setIsDiffing] = useState<boolean>(false); 
   const [diffResult, setDiffResult] = useState<string | null>(null); 
 
+  useEffect(() => {
+    const runTclIntExample = async () => {
+      try {
+        console.log("[Page Load] Calling /api/run-tclint-example...");
+        const response = await fetch('/api/run-tclint-example');
+        const data = await response.json();
+
+        if (!response.ok) {
+          console.error("[Page Load] API Error:", data.error, data.details);
+        } else {
+          console.log("[Page Load] tclint execution details:", data.message);
+          console.log("[Page Load] tclint stdout:", data.stdout);
+          if (data.stderr) {
+            console.warn("[Page Load] tclint stderr:", data.stderr);
+          }
+          console.log(`[Page Load] tclint exitCode: ${data.exitCode}`);
+        }
+      } catch (error) {
+        console.error("[Page Load] Failed to fetch or parse tclint example response:", error);
+      }
+    };
+
+    runTclIntExample();
+  }, []); // Empty dependency array ensures this runs only once on mount
+
   // Calculate if there are unsaved changes
   const fileHasChanged = currentFileContent !== null && localCode !== currentFileContent;
 
@@ -161,7 +160,7 @@ export default function Home() {
     // Logic for creating a new file
     console.log("New file action");
     // You might want to clear the editor, update state, etc.
-    updateCurrentFileContentDirectly(null);
+    updateCurrentFileContentDirectly("");
     setLocalCode("");
     setVersionBumpType('patch');
     setEditorKey(prev => prev + 1); // Remount editor for a fresh state

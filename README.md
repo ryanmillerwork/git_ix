@@ -133,14 +133,14 @@ CREATE TABLE IF NOT EXISTS users (
 **6. Run the Development Server:**
 
 ```bash
-npm run dev
+npm run dev -- -p 3001
 # or
 # yarn dev
 # or
 # pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser to access the application.
+Open [http://localhost:3001](http://localhost:3001) in your browser to access the application.
 
 **7. Build for Production:**
 
@@ -153,7 +153,7 @@ npm run build
 To run the production server:
 
 ```bash
-npm start
+npm start -- -p 3001
 ```
 
 ## Frontend Code Organization
