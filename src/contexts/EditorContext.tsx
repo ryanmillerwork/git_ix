@@ -59,6 +59,12 @@ interface EditorContextType {
     fetchFolderStructure: (branch: string) => Promise<void>;
     credentials: { githubToken?: string } | null;
     updateCredentials: (token: string | null) => void;
+
+    // Functions for file operations
+    renameItem: (path: string, newName: string) => Promise<void>;
+    deleteItem: (path: string, message: string) => Promise<void>;
+    addFile: (path: string, fileName: string) => Promise<void>;
+    addFolder: (path: string, folderName: string) => Promise<void>;
 }
 
 const EditorContext = createContext<EditorContextType | undefined>(undefined);
@@ -82,6 +88,30 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const [folderStructure, setFolderStructure] = useState<TreeNode[]>([]);
     const [isLoadingFolderStructure, setIsLoadingFolderStructure] = useState<boolean>(false);
     const [credentials, setCredentials] = useState<{ githubToken?: string } | null>(null);
+
+    // Placeholder implementations for new file operation functions
+    const renameItem = async (path: string, newName: string) => {
+        console.warn('[CONTEXT STUB] renameItem called but not implemented:', { path, newName });
+        // In a real implementation, you would make an API call here.
+        // e.g., await axios.post('/api/github/rename-item', { ... });
+        // For now, we'll just resolve the promise to satisfy the type.
+        return Promise.resolve();
+    };
+
+    const deleteItem = async (path: string, message: string) => {
+        console.warn('[CONTEXT STUB] deleteItem called but not implemented:', { path, message });
+        return Promise.resolve();
+    };
+
+    const addFile = async (path: string, fileName: string) => {
+        console.warn('[CONTEXT STUB] addFile called but not implemented:', { path, fileName });
+        return Promise.resolve();
+    };
+
+    const addFolder = async (path: string, folderName: string) => {
+        console.warn('[CONTEXT STUB] addFolder called but not implemented:', { path, folderName });
+        return Promise.resolve();
+    };
 
     // Ref to track initial mount
     const isInitialMount = useRef(true);
@@ -412,6 +442,10 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         fetchFolderStructure,
         credentials,
         updateCredentials,
+        renameItem,
+        deleteItem,
+        addFile,
+        addFolder,
     };
 
     return (
