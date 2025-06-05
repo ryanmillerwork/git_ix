@@ -110,29 +110,11 @@ export default function Home() {
   const [isLinting, setIsLinting] = useState<boolean>(false); // State for linting
   const [editorAnnotations, setEditorAnnotations] = useState([]); // State for editor annotations
 
+  // --- Effects ---
+
+  // --- Effect to check backend health on mount ---
   useEffect(() => {
-    const runTclIntExample = async () => {
-      try {
-        console.log("[Page Load] Calling /api/run-tclint-example...");
-        const response = await fetch('/api/run-tclint-example');
-        const data = await response.json();
-
-        if (!response.ok) {
-          console.error("[Page Load] API Error:", data.error, data.details);
-        } else {
-          console.log("[Page Load] tclint execution details:", data.message);
-          console.log("[Page Load] tclint stdout:", data.stdout);
-          if (data.stderr) {
-            console.warn("[Page Load] tclint stderr:", data.stderr);
-          }
-          console.log(`[Page Load] tclint exitCode: ${data.exitCode}`);
-        }
-      } catch (error) {
-        console.error("[Page Load] Failed to fetch or parse tclint example response:", error);
-      }
-    };
-
-    runTclIntExample();
+    checkBackendHealth();
   }, []); // Empty dependency array ensures this runs only once on mount
 
   // Calculate if there are unsaved changes
