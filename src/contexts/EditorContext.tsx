@@ -422,7 +422,11 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         addFolder,
     };
 
-    return <EditorContext.Provider value={contextValue}>{children}</Editor.Provider>;
+    return (
+        <EditorContext.Provider value={contextValue}>
+            {children}
+        </EditorContext.Provider>
+    );
 };
 
 export const useEditorContext = (): EditorContextType => {
