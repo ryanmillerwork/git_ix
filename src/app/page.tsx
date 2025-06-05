@@ -571,7 +571,7 @@ export default function Home() {
           <Button onClick={handleLintCode} variant="outlined" disabled={!localCode || isLinting}>
             {isLinting ? <CircularProgress size={24} /> : 'Lint'}
           </Button>
-          <Button onClick={handleFormatCode} variant="outlined" disabled={!localCode || isFormatting} sx={{ ml: 1 }}>
+          <Button onClick={handleFormatCode} variant="outlined" disabled={!localCode || isFormatting}>
             {isFormatting ? <CircularProgress size={24} /> : 'Format'}
           </Button>
           <Button 
