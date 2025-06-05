@@ -141,6 +141,7 @@ export default function Home() {
   // --- Effect to update localCode when loaded content changes or branch changes ---
   useEffect(() => {
     setLocalCode(currentFileContent || "");
+    setEditorAnnotations([]); // Clear annotations when file changes
     // Also update context about unsaved changes when file content loads/branch changes
     updateHasUnsavedChanges(false); // Reset when new content loads or branch changes
     // Add selectedBranch to dependencies
@@ -567,7 +568,7 @@ export default function Home() {
           >
             Diff
           </Button>
-          <Button onClick={handleLintCode} variant="outlined" disabled={!localCode || isLinting} sx={{ ml: 1 }}>
+          <Button onClick={handleLintCode} variant="outlined" disabled={!localCode || isLinting}>
             {isLinting ? <CircularProgress size={24} /> : 'Lint'}
           </Button>
           <Button onClick={handleFormatCode} variant="outlined" disabled={!localCode || isFormatting} sx={{ ml: 1 }}>
