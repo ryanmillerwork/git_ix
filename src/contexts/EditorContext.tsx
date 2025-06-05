@@ -65,6 +65,9 @@ interface EditorContextType {
     deleteItem: (path: string, message: string) => Promise<void>;
     addFile: (path: string, fileName: string) => Promise<void>;
     addFolder: (path: string, folderName: string) => Promise<void>;
+
+    // Files differing from main
+    differingFiles: string[];
 }
 
 const EditorContext = createContext<EditorContextType | undefined>(undefined);
@@ -88,6 +91,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const [folderStructure, setFolderStructure] = useState<TreeNode[]>([]);
     const [isLoadingFolderStructure, setIsLoadingFolderStructure] = useState<boolean>(false);
     const [credentials, setCredentials] = useState<{ githubToken?: string } | null>(null);
+    const [differingFiles, setDifferingFiles] = useState<string[]>([]);
 
     // Placeholder implementations for new file operation functions
     const renameItem = async (path: string, newName: string) => {
@@ -112,6 +116,29 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         console.warn('[CONTEXT STUB] addFolder called but not implemented:', { path, folderName });
         return Promise.resolve();
     };
+
+    // --- Function to fetch files differing from main ---
+    const fetchDifferingFiles = useCallback(async (branch: string) => {
+        if (!branch || branch === 'main') {
+            setDifferingFiles([]);
+            return;
+        }
+        console.log(`[EditorContext] Fetching differing files for branch: ${branch}`);
+        try {
+            const response = await fetch(`/api/github/compare-branch?branch=${encodeURIComponent(branch)}&base=main`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            setDifferingFiles(data.files || []);
+        } catch (err: any) {
+            console.error('[EditorContext] Failed to fetch differing files:', err.message);
+            setDifferingFiles([]); // Clear on error
+        }
+    }, []);
 
     // Ref to track initial mount
     const isInitialMount = useRef(true);
@@ -192,6 +219,10 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         console.log(`[EditorContext] Fetching folder structure for branch: ${branch}`);
         setIsLoadingFolderStructure(true);
         setError(null);
+
+        // Fetch differing files when folder structure is fetched
+        fetchDifferingFiles(branch);
+
         try {
             // Use relative URL for API route
             const response = await fetch(`/api/github/folder-structure?branch=${encodeURIComponent(branch)}`);
@@ -232,7 +263,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         } finally {
             setIsLoadingFolderStructure(false);
         }
-    }, [addRetryAction, checkBackendHealth]); // Dependencies
+    }, [addRetryAction, checkBackendHealth, fetchDifferingFiles]); // Dependencies
 
     const loadFileContent = useCallback(async (filePath: string | null, branchOverride?: string | null) => {
         if (!filePath) {
@@ -446,6 +477,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         deleteItem,
         addFile,
         addFolder,
+        differingFiles,
     };
 
     return (

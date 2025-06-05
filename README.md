@@ -13,6 +13,9 @@
     *   Connects to a PostgreSQL database to manage users (`username`, `email`, hashed `password`).
     *   Controls user access based on an `active` status flag.
     *   Manages granular permissions per user via a `branch_permissions` array (text[]), restricting access to specific Git branches.
+*   **Code Quality Tools (TCL):**
+    *   **Linting:** A "Lint" button in the editor view runs `tclint` on the current TCL code. Issues are displayed as annotations directly in the editor.
+    *   **Formatting:** A "Format" button uses `tclfmt` to automatically format TCL code according to style guidelines.
 
 ## API Endpoints
 
@@ -32,6 +35,7 @@ The application exposes several API endpoints under `/api/github/` to handle Git
 
 Other endpoints include:
 *   `/api/users`: Handles user creation (`POST /new`), activation/deactivation (`PUT /update-status`), retrieval of all users (`GET /all`), and retrieval of active user names (`GET /`).
+*   `/api/format-code`, `/api/lint-code`: Provides server-side code formatting and linting for TCL files.
 *   `/api/item`: Potentially related to specific item operations (needs further investigation).
 *   `/api/health`, `/api/ping`: System status checks.
 
@@ -170,5 +174,5 @@ Key components include:
     *   Functions for fetching folder structure and file content from the backend API.
     *   Tracking of unsaved changes in the editor.
     *   Backend health status and retry logic.
-*   **Code Editor (within `src/app/page.tsx`)**: Uses the `react-ace` library (`<AceEditor>`) to provide the text editing functionality. It displays the `currentFileContent` from `EditorContext` and updates the context when changes are made.
+*   **Code Editor (within `src/app/page.tsx`)**: Uses the `react-ace` library (`<AceEditor>`) to provide the text editing functionality. It displays the `currentFileContent` from `EditorContext`, updates the context when changes are made, and displays annotations from the linter.
 *   **Diff Viewer (within `src/app/page.tsx`)**: Uses a diffing library (`diff`) to display differences between file versions in a modal.

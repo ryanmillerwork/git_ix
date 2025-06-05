@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Drawer as MuiDrawer,
   IconButton,
@@ -31,16 +31,11 @@ import {
   Folder as FolderIcon,
   Description as DescriptionIcon,
 } from '@mui/icons-material';
-// Icons will be removed from rendering for now
-// import FolderIcon from '@mui/icons-material/Folder';
-// import DescriptionIcon from '@mui/icons-material/Description';
 import { styled, Theme, CSSObject } from '@mui/material/styles';
-// Use RichTreeView for controlled selection
 import { RichTreeView } from '@mui/x-tree-view/RichTreeView';
 import { TreeViewBaseItem } from '@mui/x-tree-view/models';
-// Import TreeItem2 components and the hook
-// import { TreeItem2, TreeItem2Props } from '@mui/x-tree-view/TreeItem2';
-import { useEditorContext } from "@/contexts/EditorContext"; // Import context hook
+import { TreeItem2, TreeItem2Props } from '@mui/x-tree-view/TreeItem2';
+import { useEditorContext } from "@/contexts/EditorContext";
 import axios from 'axios';
 import { 
   FormControl,
@@ -55,8 +50,6 @@ import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutl
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
 const drawerWidth = 300;
-// Remove or comment out the incorrect base URL
-// const API_BASE_URL = 'http://qpcs-server:3000';
 
 // --- Interfaces ---
 interface ApiTreeItem {
@@ -68,19 +61,24 @@ interface ApiTreeItem {
   url: string;
 }
 
-// TreeNode extends TreeViewBaseItem for RichTreeView
 interface TreeNode extends TreeViewBaseItem {
-  id: string; // Use path as unique ID
-  label: string; // File/folder name
+  id: string;
+  label: string;
   type: 'blob' | 'tree';
   children?: TreeNode[];
-  isFolder: boolean; // Explicitly track if it's a folder
+  isFolder: boolean;
 }
 
-// New interface for Upload Modal State
+interface CustomTreeItemProps extends Omit<TreeItem2Props, 'nodeId' | 'label'> {
+    nodeId: string;
+    label: string;
+    isDiffering?: boolean;
+    isParentOfDiffering?: boolean;
+}
+
 interface UploadModalState {
     open: boolean;
-    targetNode: TreeNode | null; // Node right-clicked
+    targetNode: TreeNode | null;
     destinationPath: string;
     selectedFiles: FileList | null;
     isUploading: boolean;
@@ -89,6 +87,17 @@ interface UploadModalState {
 }
 
 // --- Helper Functions ---
+function buildTree(items: ApiTreeItem[], basePath: string): TreeNode[] {
+    if (!items || items.length === 0) return [];
+
+    // Create a virtual root to handle items directly under basePath
+    const virtualRoot: TreeNode = { id: basePath, label: basePath, type: 'tree', children: [], isFolder: true };
+    const map: { [path: string]: TreeNode } = { [basePath]: virtualRoot };
+
+    // Sort items for predictable parent-first processing
+    const relevantItems = items
+        .filter(item => item.path !== basePath && item.path.startsWith(basePath))
+        .sort((a, b) => a.path.localeCompare(b.path));
 
 // Build tree structure (returns array of root nodes)
 function buildTree(items: ApiTreeItem[], basePath: string): TreeNode[] {
@@ -275,23 +284,41 @@ export default function Drawer() {
   const renameNewNameInputRef = useRef<HTMLInputElement>(null); // <<< NEW Ref for rename input focus
 
   // --- Context --- 
-  const context = useEditorContext();
-  const {
-    loadFileContent,
+  const { 
     selectedBranch,
+    updateSelectedFile,
+    hasUnsavedChanges,
+    folderStructure,
+    isLoadingFolderStructure,
+    fetchFolderStructure,
+    branches,
+    incrementBranchStateCounter,
+    renameItem,
+    deleteItem,
+    addFile,
+    addFolder,
+    differingFiles,
+    loadFileContent,
+    selectedFile,
+    branchStateCounter,
     selectedUser,
     password,
-    branches,
-    hasUnsavedChanges,
-    selectedFile,
-    updateSelectedFile,
-    // Get counter for branch state changes (NEW)
-    branchStateCounter,
-    renameItem = async (p: string, n: string) => console.warn('[CONTEXT MISSING] renameItem called:', p, n),
-    deleteItem = async (p: string, m: string) => console.warn('[CONTEXT MISSING] deleteItem called:', p, m),
-    addFile = async (p: string, f: string) => console.warn('[CONTEXT MISSING] addFile called:', p, f),
-    addFolder = async (p: string, f: string) => console.warn('[CONTEXT MISSING] addFolder called:', p, f),
-  } = context;
+  } = useEditorContext();
+
+  // --- Memoized sets for efficient lookups ---
+  const differingFilesSet = React.useMemo(() => new Set(differingFiles), [differingFiles]);
+  const parentOfDifferingSet = React.useMemo(() => {
+    const parentPaths = new Set<string>();
+    if (!folderStructure) return parentPaths;
+
+    differingFiles.forEach(path => {
+        const segments = path.split('/');
+        for (let i = 1; i < segments.length; i++) {
+            parentPaths.add(segments.slice(0, i).join('/'));
+        }
+    });
+    return parentPaths;
+  }, [differingFiles, folderStructure]);
 
   // --- Hooks --- 
   const theme = useTheme();
@@ -1267,579 +1294,598 @@ export default function Drawer() {
     handleCloseContextMenu();
   };
 
-  return (
-    <>
-      {/* Revert IconButton Style */}
-      <IconButton 
-        onClick={handleDrawerToggle} 
-        sx={{ 
-            // Simple positioning, no fixed, no background
-            position: 'absolute', // Or adjust based on original desired behavior
-            top: theme.spacing(1), 
-            left: open ? drawerWidth - 40 : 10, // Adjust positioning logic as needed
-            zIndex: theme.zIndex.drawer + 1, // Ensure it's above the drawer
-            transition: theme.transitions.create(['left'], { // Only transition left
-               easing: theme.transitions.easing.sharp,
-               duration: theme.transitions.duration.enteringScreen,
-            }), // <<< ADDED COMMA HERE
-        }}
-      >
-        {open ? <ChevronLeftIcon /> : <ChevronRightIcon />}
-      </IconButton>
+  // Recursive function to render tree items and pass the context menu handler
+  const renderTree = useCallback((nodes: TreeNode[]) => {
+      return nodes.map((node) => (
+          <CustomTreeItem
+              key={node.id}
+              nodeId={node.id}
+              label={node.label}
+              onContextMenu={handleContextMenu}
+              isDiffering={differingFilesSet.has(node.id)}
+              isParentOfDiffering={parentOfDifferingSet.has(node.id)}
+          >
+              {Array.isArray(node.children) ? renderTree(node.children) : null}
+          </CustomTreeItem>
+      ));
+  }, [handleContextMenu, differingFilesSet, parentOfDifferingSet]);
 
-      {/* Drawer */}
-      <DrawerComponent
-        variant={drawerVariant}
-        open={open}
-        onClose={isMobile ? handleDrawerToggle : undefined}
-        ModalProps={{ keepMounted: true }}
-        sx={drawerVariant === 'temporary' ? {
-          width: drawerWidth,
-          flexShrink: 0,
-          '& .MuiDrawer-paper': {
+  const drawerContent = (
+      <>
+        {/* Revert IconButton Style */}
+        <IconButton 
+          onClick={handleDrawerToggle} 
+          sx={{ 
+              // Simple positioning, no fixed, no background
+              position: 'absolute', // Or adjust based on original desired behavior
+              top: theme.spacing(1), 
+              left: open ? drawerWidth - 40 : 10, // Adjust positioning logic as needed
+              zIndex: theme.zIndex.drawer + 1, // Ensure it's above the drawer
+              transition: theme.transitions.create(['left'], { // Only transition left
+                 easing: theme.transitions.easing.sharp,
+                 duration: theme.transitions.duration.enteringScreen,
+              }), // <<< ADDED COMMA HERE
+          }}
+        >
+          {open ? <ChevronLeftIcon /> : <ChevronRightIcon />}
+        </IconButton>
+
+        {/* Drawer */}
+        <DrawerComponent
+          variant={drawerVariant}
+          open={open}
+          onClose={isMobile ? handleDrawerToggle : undefined}
+          ModalProps={{ keepMounted: true }}
+          sx={drawerVariant === 'temporary' ? {
             width: drawerWidth,
-            boxSizing: 'border-box',
-          },
-        } : undefined}
-      >
-        {/* Restore original spacer for AppBar */}
-        <Box sx={{ height: theme.spacing(8) }} /> 
-        <Divider />
-        
-        {/* This Box now contains both TreeView and Button */}
-        <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' }}>
-          {/* Tree View Area */} 
-          <Box sx={{ flexGrow: 1, overflowY: 'auto', overflowX: 'hidden', p: 1 }}>
-              {/* Conditional Rendering based on branch selection and loading state */} 
-              {!selectedBranch ? (
-                 <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}><Typography color="textSecondary" textAlign="center">Please select a branch to view files.</Typography></Box>
-              ) : loading ? (
-                 <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>
-              ) : error ? (
-                 <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}><Typography color="error" textAlign="center">Error: {error}</Typography></Box>
-              ) : treeData.length === 0 ? (
-                 <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}><Typography color="textSecondary" textAlign="center">No files found for this branch.</Typography></Box>
-              ) : (
-                <RichTreeView
-                  items={treeData}
-                  multiSelect
-                  checkboxSelection
-                  selectedItems={selectedItems} 
-                  onSelectedItemsChange={handleSelectedItemsChange}
-                  onItemClick={handleItemClick}
-                  onContextMenu={handleContextMenu}
-                  slotProps={{
-                    item: (ownerState) => ({
-                      'data-id': ownerState.itemId,
-                    } as any),
-                  }}
-                  sx={{
-                    flexGrow: 1, 
-                    overflowX: 'hidden', 
-                    width: '100%',
-                  }}
-                />
-              )}
+            flexShrink: 0,
+            '& .MuiDrawer-paper': {
+              width: drawerWidth,
+              boxSizing: 'border-box',
+            },
+          } : undefined}
+        >
+          {/* Restore original spacer for AppBar */}
+          <Box sx={{ height: theme.spacing(8) }} /> 
+          <Divider />
+          
+          {/* This Box now contains both TreeView and Button */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' }}>
+            {/* Tree View Area */} 
+            <Box sx={{ flexGrow: 1, overflowY: 'auto', overflowX: 'hidden', p: 1 }}>
+                {/* Conditional Rendering based on branch selection and loading state */} 
+                {!selectedBranch ? (
+                   <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}><Typography color="textSecondary" textAlign="center">Please select a branch to view files.</Typography></Box>
+                ) : loading ? (
+                   <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}><CircularProgress /></Box>
+                ) : error ? (
+                   <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}><Typography color="error" textAlign="center">Error: {error}</Typography></Box>
+                ) : treeData.length === 0 ? (
+                   <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', p: 2 }}><Typography color="textSecondary" textAlign="center">No files found for this branch.</Typography></Box>
+                ) : (
+                  <RichTreeView
+                    items={treeData}
+                    multiSelect
+                    checkboxSelection
+                    selectedItems={selectedItems} 
+                    onSelectedItemsChange={handleSelectedItemsChange}
+                    onItemClick={handleItemClick}
+                    onContextMenu={handleContextMenu}
+                    slotProps={{
+                      item: (ownerState) => ({
+                        'data-id': ownerState.itemId,
+                      } as any),
+                    }}
+                    sx={{
+                      flexGrow: 1, 
+                      overflowX: 'hidden', 
+                      width: '100%',
+                    }}
+                  />
+                )}
+            </Box>
+            {/* Button Area */} 
+            {open && selectedBranch && treeData.length > 0 && (
+                   <Box sx={{ p: 1, borderTop: `1px solid ${theme.palette.divider}` }}>
+                       <Button 
+                          variant="outlined" 
+                          fullWidth 
+                          onClick={handleOpenCopyModal}
+                          disabled={selectedItems.length === 0 || isCopying} // Disable if no items checked or copying
+                       >
+                           {isCopying ? <CircularProgress size={24} /> : `Copy ${selectedItems.length} item(s) to branch...`}
+                       </Button>
+                   </Box>
+            )}
           </Box>
-          {/* Button Area */} 
-          {open && selectedBranch && treeData.length > 0 && (
-                 <Box sx={{ p: 1, borderTop: `1px solid ${theme.palette.divider}` }}>
-                     <Button 
-                        variant="outlined" 
-                        fullWidth 
-                        onClick={handleOpenCopyModal}
-                        disabled={selectedItems.length === 0 || isCopying} // Disable if no items checked or copying
-                     >
-                         {isCopying ? <CircularProgress size={24} /> : `Copy ${selectedItems.length} item(s) to branch...`}
-                     </Button>
-                 </Box>
-          )}
-        </Box>
-      </DrawerComponent>
+        </DrawerComponent>
 
-      {/* --- Copy Files Modal --- */}
-      <Dialog open={isCopyModalOpen} onClose={handleCloseCopyModal}>
-          <DialogTitle>Copy Files to Branch</DialogTitle>
-          <DialogContent sx={{ minWidth: '400px' }}>
-              <DialogContentText sx={{ mb: 2 }}>
-                  Source Branch: <strong>{selectedBranch || 'N/A'}</strong>
-              </DialogContentText>
-              <FormControl fullWidth>
-                  <InputLabel id="target-branch-label">Target Branch</InputLabel>
-                  <MuiSelect
-                      labelId="target-branch-label"
-                      id="target-branch-select"
-                      value={targetBranch}
-                      label="Target Branch"
-                      onChange={handleTargetBranchChange}
-                      disabled={branches.length === 0 || isCopying} 
-                  >
-                       {branches.filter(b => b.name !== selectedBranch).map((branch) => (
-                          <MenuItem key={branch.name} value={branch.name}>{branch.name}</MenuItem>
-                       ))}
-                  </MuiSelect>
-              </FormControl>
+        {/* --- Copy Files Modal --- */}
+        <Dialog open={isCopyModalOpen} onClose={handleCloseCopyModal}>
+            <DialogTitle>Copy Files to Branch</DialogTitle>
+            <DialogContent sx={{ minWidth: '400px' }}>
+                <DialogContentText sx={{ mb: 2 }}>
+                    Source Branch: <strong>{selectedBranch || 'N/A'}</strong>
+                </DialogContentText>
+                <FormControl fullWidth>
+                    <InputLabel id="target-branch-label">Target Branch</InputLabel>
+                    <MuiSelect
+                        labelId="target-branch-label"
+                        id="target-branch-select"
+                        value={targetBranch}
+                        label="Target Branch"
+                        onChange={handleTargetBranchChange}
+                        disabled={branches.length === 0 || isCopying} 
+                    >
+                         {branches.filter(b => b.name !== selectedBranch).map((branch) => (
+                            <MenuItem key={branch.name} value={branch.name}>{branch.name}</MenuItem>
+                         ))}
+                    </MuiSelect>
+                </FormControl>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={handleCloseCopyModal} disabled={isCopying}>Cancel</Button>
+                <Button 
+                    onClick={handleConfirmCopy} 
+                    disabled={isCopying || targetBranch === selectedBranch} // Keep same-branch check
+                    variant="contained"
+                >
+                     {isCopying ? <CircularProgress size={24}/> : "Copy"}
+                </Button>
+            </DialogActions>
+        </Dialog>
+
+        {/* --- Snackbar for Copy Status --- */} 
+        <Snackbar 
+           open={copySnackbar?.open || false} 
+           autoHideDuration={6000} 
+           onClose={handleCloseSnackbar}
+           anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+           <Alert onClose={handleCloseSnackbar} severity={copySnackbar?.severity || 'info'} sx={{ width: '100%' }}>
+             {copySnackbar?.message}
+           </Alert>
+        </Snackbar>
+
+        {/* --- Snackbar for Create Item results --- (NEW) */}
+        <Snackbar
+           open={createItemSnackbar?.open || false}
+           autoHideDuration={6000}
+           onClose={() => setCreateItemSnackbar(null)} // Simple close handler
+           anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+           <Alert onClose={() => setCreateItemSnackbar(null)} severity={createItemSnackbar?.severity || 'info'} sx={{ width: '100%' }}>
+             {createItemSnackbar?.message}
+           </Alert>
+        </Snackbar>
+
+        {/* Unsaved Changes Confirmation Dialog */}
+        <Dialog
+          open={isUnsavedChangesDialogOpen}
+          onClose={handleCloseUnsavedDialog}
+          aria-labelledby="unsaved-changes-dialog-title"
+          aria-describedby="unsaved-changes-dialog-description"
+        >
+          <DialogTitle id="unsaved-changes-dialog-title">
+            Discard Unsaved Changes?
+          </DialogTitle>
+          <DialogContent>
+            <DialogContentText id="unsaved-changes-dialog-description">
+              You have unsaved changes in the current file. Are you sure you want to discard them and open a different file?
+            </DialogContentText>
           </DialogContent>
           <DialogActions>
-              <Button onClick={handleCloseCopyModal} disabled={isCopying}>Cancel</Button>
-              <Button 
-                  onClick={handleConfirmCopy} 
-                  disabled={isCopying || targetBranch === selectedBranch} // Keep same-branch check
-                  variant="contained"
-              >
-                   {isCopying ? <CircularProgress size={24}/> : "Copy"}
-              </Button>
+            <Button onClick={handleCloseUnsavedDialog}>Cancel</Button>
+            <Button onClick={handleConfirmDiscardChanges} color="warning"> 
+              Discard Changes
+            </Button>
           </DialogActions>
-      </Dialog>
+        </Dialog>
 
-      {/* --- Snackbar for Copy Status --- */} 
-      <Snackbar 
-         open={copySnackbar?.open || false} 
-         autoHideDuration={6000} 
-         onClose={handleCloseSnackbar}
-         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-         <Alert onClose={handleCloseSnackbar} severity={copySnackbar?.severity || 'info'} sx={{ width: '100%' }}>
-           {copySnackbar?.message}
-         </Alert>
-      </Snackbar>
+        {/* Context Menu */}
+        <Menu
+          open={contextMenu !== null}
+          onClose={handleCloseContextMenu}
+          anchorReference="anchorPosition"
+          anchorPosition={ contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined }
+          onContextMenu={(e) => e.preventDefault()} 
+        >
+           <MenuItem onClick={handleRename} disabled={!contextMenu?.node}>Rename...</MenuItem>
+           <MenuItem onClick={handleCopy} disabled={!contextMenu?.node}>Copy...</MenuItem>
+           {contextMenu?.node?.type === 'tree' && [
+                <MenuItem key="add-file" onClick={handleAddFile}>New File...</MenuItem>,
+                <MenuItem key="add-folder" onClick={handleAddFolder}>New Folder...</MenuItem>
+           ]}
+           <MenuItem onClick={handleOpenUploadModal} disabled={!contextMenu?.node}>Upload...</MenuItem> 
+           <Divider />
+           <MenuItem onClick={handleDelete} sx={{ color: 'error.main' }} disabled={!contextMenu?.node}>Delete</MenuItem>
+        </Menu>
 
-      {/* --- Snackbar for Create Item results --- (NEW) */}
-      <Snackbar
-         open={createItemSnackbar?.open || false}
-         autoHideDuration={6000}
-         onClose={() => setCreateItemSnackbar(null)} // Simple close handler
-         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-         <Alert onClose={() => setCreateItemSnackbar(null)} severity={createItemSnackbar?.severity || 'info'} sx={{ width: '100%' }}>
-           {createItemSnackbar?.message}
-         </Alert>
-      </Snackbar>
-
-      {/* Unsaved Changes Confirmation Dialog */}
-      <Dialog
-        open={isUnsavedChangesDialogOpen}
-        onClose={handleCloseUnsavedDialog}
-        aria-labelledby="unsaved-changes-dialog-title"
-        aria-describedby="unsaved-changes-dialog-description"
-      >
-        <DialogTitle id="unsaved-changes-dialog-title">
-          Discard Unsaved Changes?
-        </DialogTitle>
-        <DialogContent>
-          <DialogContentText id="unsaved-changes-dialog-description">
-            You have unsaved changes in the current file. Are you sure you want to discard them and open a different file?
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseUnsavedDialog}>Cancel</Button>
-          <Button onClick={handleConfirmDiscardChanges} color="warning"> 
-            Discard Changes
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Context Menu */}
-      <Menu
-        open={contextMenu !== null}
-        onClose={handleCloseContextMenu}
-        anchorReference="anchorPosition"
-        anchorPosition={ contextMenu ? { top: contextMenu.mouseY, left: contextMenu.mouseX } : undefined }
-        onContextMenu={(e) => e.preventDefault()} 
-      >
-         <MenuItem onClick={handleRename} disabled={!contextMenu?.node}>Rename...</MenuItem>
-         <MenuItem onClick={handleCopy} disabled={!contextMenu?.node}>Copy...</MenuItem>
-         {contextMenu?.node?.type === 'tree' && [
-              <MenuItem key="add-file" onClick={handleAddFile}>New File...</MenuItem>,
-              <MenuItem key="add-folder" onClick={handleAddFolder}>New Folder...</MenuItem>
-         ]}
-         <MenuItem onClick={handleOpenUploadModal} disabled={!contextMenu?.node}>Upload...</MenuItem> 
-         <Divider />
-         <MenuItem onClick={handleDelete} sx={{ color: 'error.main' }} disabled={!contextMenu?.node}>Delete</MenuItem>
-      </Menu>
-
-      {/* --- New Item Creation Modal --- (NEW) */}
-      <Dialog open={isNewItemModalOpen} onClose={handleCloseNewItemModal} maxWidth="xs" fullWidth>
-        <DialogTitle>Create New {newItemType === 'file' ? 'File' : 'Folder'}</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 2 }}>
-            Enter the name for the new {newItemType === 'file' ? 'file' : 'folder'} within the folder:
-            <br />
-            <strong>{modalTargetPath}</strong>
-          </DialogContentText>
-          <TextField
-            inputRef={newItemNameInputRef} // <<< Attach the ref here
-            margin="dense"
-            id="newItemName"
-            label={newItemType === 'file' ? "File Name" : "Folder Name"}
-            type="text"
-            fullWidth
-            variant="outlined"
-            value={newItemName}
-            onChange={handleNewItemNameChange}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                if (!isCreatingItem && newItemName && !newItemName.includes('/') && !newItemName.includes('\\')) {
-                  handleConfirmCreateItem();
-                }
-              }
-            }}
-            error={!!createItemError || newItemName.includes('/') || newItemName.includes('\\')}
-            helperText={createItemError || ((newItemName.includes('/') || newItemName.includes('\\')) ? "Names cannot contain slashes." : "")}
-            disabled={isCreatingItem}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseNewItemModal} disabled={isCreatingItem}>Cancel</Button>
-          <Button 
-            onClick={handleConfirmCreateItem}
-            variant="contained" 
-            disabled={isCreatingItem || !newItemName || newItemName.includes('/') || newItemName.includes('\\')}
-          >
-            {isCreatingItem ? <CircularProgress size={24} /> : "Create"}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* --- Delete Confirmation Modal --- (NEW) */}
-      <Dialog open={isDeleteModalOpen} onClose={handleCloseDeleteModal} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ color: 'error.main' }}>Confirm Deletion</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 2 }}>
-            Are you sure you want to delete the following {deleteItemType}?
-            <br />
-            <strong>{deleteItemPath}</strong>
-          </DialogContentText>
-          <TextField
-            inputRef={deleteCommitMessageInputRef} // <<< Attach ref
-            margin="dense"
-            id="deleteCommitMessage"
-            label="Commit Message"
-            type="text"
-            fullWidth
-            variant="outlined"
-            value={deleteCommitMessage}
-            onChange={(e) => {
-                setDeleteCommitMessage(e.target.value);
-                if (deleteError) setDeleteError(null); // Clear error on type
-            }}
-            onKeyDown={(e) => { // <<< Add onKeyDown handler
-                // Submit on Enter unless Shift is also pressed (for multiline)
-                if (e.key === 'Enter' && !e.shiftKey) { 
-                  e.preventDefault(); // Prevent newline
-                  // Allow submit even if message is empty now
-                  if (!isDeletingItem) {
-                    handleConfirmDeleteItem();
+        {/* --- New Item Creation Modal --- (NEW) */}
+        <Dialog open={isNewItemModalOpen} onClose={handleCloseNewItemModal} maxWidth="xs" fullWidth>
+          <DialogTitle>Create New {newItemType === 'file' ? 'File' : 'Folder'}</DialogTitle>
+          <DialogContent>
+            <DialogContentText sx={{ mb: 2 }}>
+              Enter the name for the new {newItemType === 'file' ? 'file' : 'folder'} within the folder:
+              <br />
+              <strong>{modalTargetPath}</strong>
+            </DialogContentText>
+            <TextField
+              inputRef={newItemNameInputRef} // <<< Attach the ref here
+              margin="dense"
+              id="newItemName"
+              label={newItemType === 'file' ? "File Name" : "Folder Name"}
+              type="text"
+              fullWidth
+              variant="outlined"
+              value={newItemName}
+              onChange={handleNewItemNameChange}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (!isCreatingItem && newItemName && !newItemName.includes('/') && !newItemName.includes('\\')) {
+                    handleConfirmCreateItem();
                   }
                 }
               }}
-            multiline // Allow multiline messages
-            rows={2}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseDeleteModal} disabled={isDeletingItem}>Cancel</Button>
-          <Button 
-            onClick={handleConfirmDeleteItem} 
-            color="error" 
-            variant="contained" 
-            disabled={isDeletingItem} // Only disable while deleting
-          >
-            {isDeletingItem ? <CircularProgress size={24} /> : `Delete ${deleteItemType}`}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* --- Snackbar for Delete Status --- (NEW) */}
-      <Snackbar 
-         open={deleteSnackbar?.open || false} 
-         autoHideDuration={6000} 
-         onClose={() => setDeleteSnackbar(null)} // Simple close handler
-         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-         <Alert onClose={() => setDeleteSnackbar(null)} severity={deleteSnackbar?.severity || 'info'} sx={{ width: '100%' }}>
-           {deleteSnackbar?.message}
-         </Alert>
-      </Snackbar>
-
-      {/* --- Intra-Branch Copy Modal --- (Fix Tree Selection) */}
-      <Dialog open={isIntraBranchCopyModalOpen} onClose={handleCloseIntraBranchCopyModal} maxWidth="sm" fullWidth>
-        <DialogTitle>Copy Item within Branch: {selectedBranch}</DialogTitle>
-        <DialogContent>
-           {(() => { // Use IIFE to calculate derived state
-               const isConflict = selectedDestinationFolder && copyNewName && `${selectedDestinationFolder}/${copyNewName}` === copySourcePath;
-               const finalError = intraBranchCopyError || (isConflict ? 'New name in the selected destination conflicts with the source path.' : null);
-
-               return (
-                  <>
-                     <DialogContentText sx={{ mb: 1 }}>
-                        Copying {copySourceType}: <br /><strong>{copySourcePath}</strong>
-                     </DialogContentText>
-
-                     <Typography variant="subtitle1" sx={{ mt: 2, mb: 1 }}>Select Destination Folder:</Typography>
-                     <Box sx={{
-                         border: '1px solid', 
-                         borderColor: theme.palette.divider,
-                         borderRadius: theme.shape.borderRadius,
-                         height: '250px', // Adjust height as needed
-                         overflow: 'auto',
-                         mb: 2, // Margin below the tree
-                     }}>
-                        <RichTreeView
-                           items={filterFolders(treeData)} 
-                           selectedItems={selectedDestinationFolder || undefined}
-                           multiSelect={false}
-                           onSelectedItemsChange={(event, itemId) => {
-                              const newSelection = Array.isArray(itemId) ? itemId[0] : itemId as string | null;
-                              setSelectedDestinationFolder(newSelection || null);
-                              if (intraBranchCopyError) setIntraBranchCopyError(null); 
-                           }}
-                           sx={{ flexGrow: 1, width: '100%' }}
-                        />
-                     </Box>
-                     {/* Display error specifically related to destination selection */} 
-                     {finalError?.includes('destination folder') && (
-                        <Typography variant="caption" color="error" sx={{mb: 2}}>{finalError}</Typography>
-                     )}
-
-                     <TextField
-                        required
-                        margin="dense"
-                        id="copyNewName"
-                        label="New Name"
-                        type="text"
-                        fullWidth
-                        variant="outlined"
-                        value={copyNewName}
-                        onChange={(e) => {
-                           setCopyNewName(e.target.value);
-                           if (intraBranchCopyError) setIntraBranchCopyError(null); 
-                        }}
-                        onKeyDown={(e) => {
-                           if (e.key === 'Enter') {
-                              e.preventDefault();
-                              // Check validity including conflict
-                              const isValid = !isCopyingIntraBranch && selectedDestinationFolder && copyNewName && 
-                                             !copyNewName.includes('/') && !copyNewName.includes('\\') && !isConflict;
-                              if (isValid) {
-                                 handleConfirmIntraBranchCopy();
-                              }
-                           }
-                        }}
-                        error={!!finalError} // Use combined error state
-                        helperText={finalError || "Enter the name for the copied item."}
-                        disabled={isCopyingIntraBranch}
-                     />
-
-                     <Typography variant="body2" sx={{ mt: 2, mb: 1, wordBreak: 'break-all' }}>
-                        Destination: {/* Changed label from Full Destination */} 
-                        {selectedDestinationFolder !== null 
-                          ? `${selectedDestinationFolder}${selectedDestinationFolder === '' ? '' : '/'}${copyNewName || '...'}` 
-                          : '(Select folder above)'
-                        }
-                     </Typography>
-                  </>
-               );
-           })()}
-        </DialogContent>
-        <DialogActions>
-           <Button onClick={handleCloseIntraBranchCopyModal} disabled={isCopyingIntraBranch}>Cancel</Button>
-           <Button 
-             onClick={handleConfirmIntraBranchCopy} 
-             variant="contained" 
-             // Update disabled check to include conflict
-             disabled={isCopyingIntraBranch || !selectedDestinationFolder || !copyNewName || copyNewName.includes('/') || copyNewName.includes('\\') || (`${selectedDestinationFolder}/${copyNewName}` === copySourcePath)}
-           >
-             {isCopyingIntraBranch ? <CircularProgress size={24} /> : "Copy"}
-           </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* --- Snackbar for Intra-Branch Copy Status --- (NEW) */}
-      <Snackbar 
-         open={intraBranchCopySnackbar?.open || false} 
-         autoHideDuration={6000} 
-         onClose={() => setIntraBranchCopySnackbar(null)} // Simple close handler
-         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-         <Alert onClose={() => setIntraBranchCopySnackbar(null)} severity={intraBranchCopySnackbar?.severity || 'info'} sx={{ width: '100%' }}>
-           {intraBranchCopySnackbar?.message}
-         </Alert>
-      </Snackbar>
-
-      {/* --- Rename Modal --- (NEW) */}
-      <Dialog open={isRenameModalOpen} onClose={handleCloseRenameModal} maxWidth="sm" fullWidth>
-        <DialogTitle>Rename {renameItemType}</DialogTitle>
-        <DialogContent>
-          {(() => { // IIFE for derived state
-              const isSameName = renameNewName === renameOriginalName;
-              const containsSlash = renameNewName.includes('/') || renameNewName.includes('\\');
-              const isEmpty = !renameNewName.trim();
-              const isInvalid = isEmpty || containsSlash;
-              const showConflictWarning = !isInvalid && isSameName;
-              const finalHelperText = renameError || 
-                                    (isEmpty ? 'Name cannot be empty.' : null) ||
-                                    (containsSlash ? 'Name cannot contain slashes.' : null) ||
-                                    (showConflictWarning ? 'Please enter a different name.' : null) ||
-                                    'Enter the new name.';
-              const hasError = !!renameError || isInvalid;
-              const canSubmit = !isInvalid && !isSameName && !isRenamingItem;
-
-              // Get path without the original name
-              const displayPath = renameItemPath?.substring(0, renameItemPath.lastIndexOf('/') + 1) || '';
-
-              return (
-                  <>
-                     <DialogContentText sx={{ mb: 1, wordBreak: 'break-all' }}>
-                       Renaming item in folder: <strong>{displayPath}</strong>
-                       <br />
-                       Original name: <strong>{renameOriginalName}</strong>
-                     </DialogContentText>
-
-                     <TextField
-                       required
-                       // autoFocus // Use useEffect instead
-                       inputRef={renameNewNameInputRef} // Attach ref
-                       margin="dense"
-                       id="renameNewName"
-                       label="New Name"
-                       type="text"
-                       fullWidth
-                       variant="outlined"
-                       value={renameNewName}
-                       onChange={(e) => {
-                         setRenameNewName(e.target.value);
-                         if (renameError) setRenameError(null); // Clear API error on change
-                       }}
-                       onKeyDown={(e) => {
-                         if (e.key === 'Enter' && canSubmit) {
-                           e.preventDefault();
-                           handleConfirmRename();
-                         }
-                       }}
-                       error={hasError}
-                       helperText={finalHelperText}
-                       disabled={isRenamingItem}
-                     />
-                  </>
-               );
-            })()}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCloseRenameModal} disabled={isRenamingItem}>Cancel</Button>
-          <Button 
-            onClick={handleConfirmRename} 
-            variant="contained" 
-            // Disable if invalid, same name, or renaming is in progress
-            disabled={!renameNewName || renameNewName === renameOriginalName || renameNewName.includes('/') || renameNewName.includes('\\') || isRenamingItem}
-          >
-            {isRenamingItem ? <CircularProgress size={24} /> : "Rename"}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* --- Upload Modal (Updated Destination Display) */} 
-      <Dialog open={uploadModalState.open} onClose={handleCloseUploadModal} maxWidth="sm" fullWidth>
-          <DialogTitle>Upload Files</DialogTitle> 
-          <DialogContent>
-              {uploadModalState.error && <Alert severity="error" sx={{ mb: 2 }}>{uploadModalState.error}</Alert>}
-              
-              {/* --- Destination Folder Display (Simplified) --- */}
-              <Typography variant="subtitle1" sx={{ mt: 1, mb: 0.5 }}>
-                  Destination Folder:
-              </Typography>
-              <Typography variant="body2" sx={{ fontFamily: 'monospace', mb: 2, wordBreak: 'break-all' }}>
-                   {uploadModalState.destinationPath || '/'} {/* Display full path or root */} 
-              </Typography>
-              
-              {/* --- Destination Folder Tree --- */}
-              <Typography variant="caption" sx={{ mb: 0.5, display: 'block', fontStyle: 'italic'}}>
-                  (Select a folder below to change destination)
-              </Typography>
-              <Box sx={{
-                  border: '1px solid',
-                  borderColor: theme.palette.divider,
-                  borderRadius: theme.shape.borderRadius,
-                  height: '200px', 
-                  overflow: 'auto',
-                  mb: 2, 
-              }}>
-                 <RichTreeView
-                    items={filterFolders(treeData)} // Show only folders
-                    selectedItems={uploadModalState.destinationPath || undefined} // Control selection
-                    multiSelect={false}
-                    onSelectedItemsChange={handleUploadDestinationChange} // Update state on change
-                    sx={{ flexGrow: 1, width: '100%' }}
-                 />
-              </Box>
-
-              {/* --- File Input Button --- */}
-              <Button
-                  variant="contained"
-                  component="label" 
-                  startIcon={<CloudUploadIcon />}
-                  sx={{ mb: 2 }}
-                  disabled={uploadModalState.isUploading}
-              >
-                  Select Files {/* Changed back */} 
-                  <input
-                      type="file"
-                      hidden
-                      multiple // Keep multiple files allowed
-                      onChange={handleFileSelection}
-                  />
-              </Button>
-
-              {/* --- Display Selected Files --- */} 
-              {uploadModalState.selectedFiles && uploadModalState.selectedFiles.length > 0 && (
-                  <Box sx={{ maxHeight: 150, overflowY: 'auto', border: '1px solid', borderColor: 'divider', p: 1, mb: 2 }}>
-                      <Typography variant="caption" display="block" gutterBottom>Selected:</Typography>
-                      <ul>
-                          {Array.from(uploadModalState.selectedFiles).map((file, index) => (
-                              <li key={index}>
-                                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
-                                      {/* Display relative path for folders, name for files if webkitdirectory wasn't fully effective */}
-                                      {/* @ts-ignore */}
-                                      {file.webkitRelativePath || file.name}
-                                  </Typography>
-                              </li>
-                          ))}
-                      </ul>
-                  </Box>
-              )}
-              {(!uploadModalState.selectedFiles || uploadModalState.selectedFiles.length === 0) && (
-                   <Typography variant="caption" sx={{ fontStyle: 'italic', display: 'block', mb: 2 }}>
-                       No files selected. {/* Changed back */} 
-                   </Typography>
-              )}
-
+              error={!!createItemError || newItemName.includes('/') || newItemName.includes('\\')}
+              helperText={createItemError || ((newItemName.includes('/') || newItemName.includes('\\')) ? "Names cannot contain slashes." : "")}
+              disabled={isCreatingItem}
+            />
           </DialogContent>
           <DialogActions>
-              <Button onClick={handleCloseUploadModal} disabled={uploadModalState.isUploading}>Cancel</Button>
-              <Button 
-                  onClick={handleConfirmUpload} 
-                  disabled={!uploadModalState.destinationPath || !uploadModalState.selectedFiles || uploadModalState.selectedFiles.length === 0 || uploadModalState.isUploading} 
-                  variant="contained"
-                  startIcon={uploadModalState.isUploading ? <CircularProgress size={20} color="inherit" /> : null}
-              >
-                  {uploadModalState.isUploading ? "Uploading..." : "Upload"}
-              </Button>
+            <Button onClick={handleCloseNewItemModal} disabled={isCreatingItem}>Cancel</Button>
+            <Button 
+              onClick={handleConfirmCreateItem}
+              variant="contained" 
+              disabled={isCreatingItem || !newItemName || newItemName.includes('/') || newItemName.includes('\\')}
+            >
+              {isCreatingItem ? <CircularProgress size={24} /> : "Create"}
+            </Button>
           </DialogActions>
-      </Dialog>
+        </Dialog>
 
-      {/* --- Upload Snackbar (NEW) */}
-      <Snackbar 
-          open={uploadModalState.snackbar?.open || false} 
-          autoHideDuration={6000} 
-          onClose={handleCloseUploadSnackbar}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-          <Alert onClose={handleCloseUploadSnackbar} severity={uploadModalState.snackbar?.severity || 'info'} sx={{ width: '100%' }}>
-              {uploadModalState.snackbar?.message}
-          </Alert>
-      </Snackbar>
+        {/* --- Delete Confirmation Modal --- (NEW) */}
+        <Dialog open={isDeleteModalOpen} onClose={handleCloseDeleteModal} maxWidth="sm" fullWidth>
+          <DialogTitle sx={{ color: 'error.main' }}>Confirm Deletion</DialogTitle>
+          <DialogContent>
+            <DialogContentText sx={{ mb: 2 }}>
+              Are you sure you want to delete the following {deleteItemType}?
+              <br />
+              <strong>{deleteItemPath}</strong>
+            </DialogContentText>
+            <TextField
+              inputRef={deleteCommitMessageInputRef} // <<< Attach ref
+              margin="dense"
+              id="deleteCommitMessage"
+              label="Commit Message"
+              type="text"
+              fullWidth
+              variant="outlined"
+              value={deleteCommitMessage}
+              onChange={(e) => {
+                  setDeleteCommitMessage(e.target.value);
+                  if (deleteError) setDeleteError(null); // Clear error on type
+              }}
+              onKeyDown={(e) => { // <<< Add onKeyDown handler
+                  // Submit on Enter unless Shift is also pressed (for multiline)
+                  if (e.key === 'Enter' && !e.shiftKey) { 
+                    e.preventDefault(); // Prevent newline
+                    // Allow submit even if message is empty now
+                    if (!isDeletingItem) {
+                      handleConfirmDeleteItem();
+                    }
+                  }
+                }}
+              multiline // Allow multiline messages
+              rows={2}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleCloseDeleteModal} disabled={isDeletingItem}>Cancel</Button>
+            <Button 
+              onClick={handleConfirmDeleteItem} 
+              color="error" 
+              variant="contained" 
+              disabled={isDeletingItem} // Only disable while deleting
+            >
+              {isDeletingItem ? <CircularProgress size={24} /> : `Delete ${deleteItemType}`}
+            </Button>
+          </DialogActions>
+        </Dialog>
 
-    </>
-  );
+        {/* --- Snackbar for Delete Status --- (NEW) */}
+        <Snackbar 
+           open={deleteSnackbar?.open || false} 
+           autoHideDuration={6000} 
+           onClose={() => setDeleteSnackbar(null)} // Simple close handler
+           anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+           <Alert onClose={() => setDeleteSnackbar(null)} severity={deleteSnackbar?.severity || 'info'} sx={{ width: '100%' }}>
+             {deleteSnackbar?.message}
+           </Alert>
+        </Snackbar>
+
+        {/* --- Intra-Branch Copy Modal --- (Fix Tree Selection) */}
+        <Dialog open={isIntraBranchCopyModalOpen} onClose={handleCloseIntraBranchCopyModal} maxWidth="sm" fullWidth>
+          <DialogTitle>Copy Item within Branch: {selectedBranch}</DialogTitle>
+          <DialogContent>
+             {(() => { // Use IIFE to calculate derived state
+                 const isConflict = selectedDestinationFolder && copyNewName && `${selectedDestinationFolder}/${copyNewName}` === copySourcePath;
+                 const finalError = intraBranchCopyError || (isConflict ? 'New name in the selected destination conflicts with the source path.' : null);
+
+                 return (
+                    <>
+                       <DialogContentText sx={{ mb: 1 }}>
+                          Copying {copySourceType}: <br /><strong>{copySourcePath}</strong>
+                       </DialogContentText>
+
+                       <Typography variant="subtitle1" sx={{ mt: 2, mb: 1 }}>Select Destination Folder:</Typography>
+                       <Box sx={{
+                           border: '1px solid', 
+                           borderColor: theme.palette.divider,
+                           borderRadius: theme.shape.borderRadius,
+                           height: '250px', // Adjust height as needed
+                           overflow: 'auto',
+                           mb: 2, // Margin below the tree
+                       }}>
+                          <RichTreeView
+                             items={filterFolders(treeData)} 
+                             selectedItems={selectedDestinationFolder || undefined}
+                             multiSelect={false}
+                             onSelectedItemsChange={(event, itemId) => {
+                                const newSelection = Array.isArray(itemId) ? itemId[0] : itemId as string | null;
+                                setSelectedDestinationFolder(newSelection || null);
+                                if (intraBranchCopyError) setIntraBranchCopyError(null); 
+                             }}
+                             sx={{ flexGrow: 1, width: '100%' }}
+                          />
+                       </Box>
+                       {/* Display error specifically related to destination selection */} 
+                       {finalError?.includes('destination folder') && (
+                          <Typography variant="caption" color="error" sx={{mb: 2}}>{finalError}</Typography>
+                       )}
+
+                       <TextField
+                          required
+                          margin="dense"
+                          id="copyNewName"
+                          label="New Name"
+                          type="text"
+                          fullWidth
+                          variant="outlined"
+                          value={copyNewName}
+                          onChange={(e) => {
+                             setCopyNewName(e.target.value);
+                             if (intraBranchCopyError) setIntraBranchCopyError(null); 
+                          }}
+                          onKeyDown={(e) => {
+                             if (e.key === 'Enter') {
+                                e.preventDefault();
+                                // Check validity including conflict
+                                const isValid = !isCopyingIntraBranch && selectedDestinationFolder && copyNewName && 
+                                               !copyNewName.includes('/') && !copyNewName.includes('\\') && !isConflict;
+                                if (isValid) {
+                                   handleConfirmIntraBranchCopy();
+                                }
+                             }
+                          }}
+                          error={!!finalError} // Use combined error state
+                          helperText={finalError || "Enter the name for the copied item."}
+                          disabled={isCopyingIntraBranch}
+                       />
+
+                       <Typography variant="body2" sx={{ mt: 2, mb: 1, wordBreak: 'break-all' }}>
+                          Destination: {/* Changed label from Full Destination */} 
+                          {selectedDestinationFolder !== null 
+                            ? `${selectedDestinationFolder}${selectedDestinationFolder === '' ? '' : '/'}${copyNewName || '...'}` 
+                            : '(Select folder above)'
+                          }
+                       </Typography>
+                    </>
+                 );
+             })()}
+          </DialogContent>
+          <DialogActions>
+             <Button onClick={handleCloseIntraBranchCopyModal} disabled={isCopyingIntraBranch}>Cancel</Button>
+             <Button 
+               onClick={handleConfirmIntraBranchCopy} 
+               variant="contained" 
+               // Update disabled check to include conflict
+               disabled={isCopyingIntraBranch || !selectedDestinationFolder || !copyNewName || copyNewName.includes('/') || copyNewName.includes('\\') || (`${selectedDestinationFolder}/${copyNewName}` === copySourcePath)}
+             >
+               {isCopyingIntraBranch ? <CircularProgress size={24} /> : "Copy"}
+             </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* --- Snackbar for Intra-Branch Copy Status --- (NEW) */}
+        <Snackbar 
+           open={intraBranchCopySnackbar?.open || false} 
+           autoHideDuration={6000} 
+           onClose={() => setIntraBranchCopySnackbar(null)} // Simple close handler
+           anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+           <Alert onClose={() => setIntraBranchCopySnackbar(null)} severity={intraBranchCopySnackbar?.severity || 'info'} sx={{ width: '100%' }}>
+             {intraBranchCopySnackbar?.message}
+           </Alert>
+        </Snackbar>
+
+        {/* --- Rename Modal --- (NEW) */}
+        <Dialog open={isRenameModalOpen} onClose={handleCloseRenameModal} maxWidth="sm" fullWidth>
+          <DialogTitle>Rename {renameItemType}</DialogTitle>
+          <DialogContent>
+            {(() => { // IIFE for derived state
+                const isSameName = renameNewName === renameOriginalName;
+                const containsSlash = renameNewName.includes('/') || renameNewName.includes('\\');
+                const isEmpty = !renameNewName.trim();
+                const isInvalid = isEmpty || containsSlash;
+                const showConflictWarning = !isInvalid && isSameName;
+                const finalHelperText = renameError || 
+                                      (isEmpty ? 'Name cannot be empty.' : null) ||
+                                      (containsSlash ? 'Name cannot contain slashes.' : null) ||
+                                      (showConflictWarning ? 'Please enter a different name.' : null) ||
+                                      'Enter the new name.';
+                const hasError = !!renameError || isInvalid;
+                const canSubmit = !isInvalid && !isSameName && !isRenamingItem;
+
+                // Get path without the original name
+                const displayPath = renameItemPath?.substring(0, renameItemPath.lastIndexOf('/') + 1) || '';
+
+                return (
+                    <>
+                       <DialogContentText sx={{ mb: 1, wordBreak: 'break-all' }}>
+                         Renaming item in folder: <strong>{displayPath}</strong>
+                         <br />
+                         Original name: <strong>{renameOriginalName}</strong>
+                       </DialogContentText>
+
+                       <TextField
+                         required
+                         // autoFocus // Use useEffect instead
+                         inputRef={renameNewNameInputRef} // Attach ref
+                         margin="dense"
+                         id="renameNewName"
+                         label="New Name"
+                         type="text"
+                         fullWidth
+                         variant="outlined"
+                         value={renameNewName}
+                         onChange={(e) => {
+                           setRenameNewName(e.target.value);
+                           if (renameError) setRenameError(null); // Clear API error on change
+                         }}
+                         onKeyDown={(e) => {
+                           if (e.key === 'Enter' && canSubmit) {
+                             e.preventDefault();
+                             handleConfirmRename();
+                           }
+                         }}
+                         error={hasError}
+                         helperText={finalHelperText}
+                         disabled={isRenamingItem}
+                       />
+                    </>
+                 );
+              })()}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleCloseRenameModal} disabled={isRenamingItem}>Cancel</Button>
+            <Button 
+              onClick={handleConfirmRename} 
+              variant="contained" 
+              // Disable if invalid, same name, or renaming is in progress
+              disabled={!renameNewName || renameNewName === renameOriginalName || renameNewName.includes('/') || renameNewName.includes('\\') || isRenamingItem}
+            >
+              {isRenamingItem ? <CircularProgress size={24} /> : "Rename"}
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* --- Upload Modal (Updated Destination Display) */} 
+        <Dialog open={uploadModalState.open} onClose={handleCloseUploadModal} maxWidth="sm" fullWidth>
+            <DialogTitle>Upload Files</DialogTitle> 
+            <DialogContent>
+                {uploadModalState.error && <Alert severity="error" sx={{ mb: 2 }}>{uploadModalState.error}</Alert>}
+                
+                {/* --- Destination Folder Display (Simplified) --- */}
+                <Typography variant="subtitle1" sx={{ mt: 1, mb: 0.5 }}>
+                    Destination Folder:
+                </Typography>
+                <Typography variant="body2" sx={{ fontFamily: 'monospace', mb: 2, wordBreak: 'break-all' }}>
+                     {uploadModalState.destinationPath || '/'} {/* Display full path or root */} 
+                </Typography>
+                
+                {/* --- Destination Folder Tree --- */}
+                <Typography variant="caption" sx={{ mb: 0.5, display: 'block', fontStyle: 'italic'}}>
+                    (Select a folder below to change destination)
+                </Typography>
+                <Box sx={{
+                    border: '1px solid',
+                    borderColor: theme.palette.divider,
+                    borderRadius: theme.shape.borderRadius,
+                    height: '200px', 
+                    overflow: 'auto',
+                    mb: 2, 
+                }}>
+                   <RichTreeView
+                      items={filterFolders(treeData)} // Show only folders
+                      selectedItems={uploadModalState.destinationPath || undefined} // Control selection
+                      multiSelect={false}
+                      onSelectedItemsChange={handleUploadDestinationChange} // Update state on change
+                      sx={{ flexGrow: 1, width: '100%' }}
+                   />
+                </Box>
+
+                {/* --- File Input Button --- */}
+                <Button
+                    variant="contained"
+                    component="label" 
+                    startIcon={<CloudUploadIcon />}
+                    sx={{ mb: 2 }}
+                    disabled={uploadModalState.isUploading}
+                >
+                    Select Files {/* Changed back */} 
+                    <input
+                        type="file"
+                        hidden
+                        multiple // Keep multiple files allowed
+                        onChange={handleFileSelection}
+                    />
+                </Button>
+
+                {/* --- Display Selected Files --- */} 
+                {uploadModalState.selectedFiles && uploadModalState.selectedFiles.length > 0 && (
+                    <Box sx={{ maxHeight: 150, overflowY: 'auto', border: '1px solid', borderColor: 'divider', p: 1, mb: 2 }}>
+                        <Typography variant="caption" display="block" gutterBottom>Selected:</Typography>
+                        <ul>
+                            {Array.from(uploadModalState.selectedFiles).map((file, index) => (
+                                <li key={index}>
+                                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                                        {/* Display relative path for folders, name for files if webkitdirectory wasn't fully effective */}
+                                        {/* @ts-ignore */}
+                                        {file.webkitRelativePath || file.name}
+                                    </Typography>
+                                </li>
+                            ))}
+                        </ul>
+                    </Box>
+                )}
+                {(!uploadModalState.selectedFiles || uploadModalState.selectedFiles.length === 0) && (
+                     <Typography variant="caption" sx={{ fontStyle: 'italic', display: 'block', mb: 2 }}>
+                         No files selected. {/* Changed back */} 
+                     </Typography>
+                )}
+
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={handleCloseUploadModal} disabled={uploadModalState.isUploading}>Cancel</Button>
+                <Button 
+                    onClick={handleConfirmUpload} 
+                    disabled={!uploadModalState.destinationPath || !uploadModalState.selectedFiles || uploadModalState.selectedFiles.length === 0 || uploadModalState.isUploading} 
+                    variant="contained"
+                    startIcon={uploadModalState.isUploading ? <CircularProgress size={20} color="inherit" /> : null}
+                >
+                    {uploadModalState.isUploading ? "Uploading..." : "Upload"}
+                </Button>
+            </DialogActions>
+        </Dialog>
+
+        {/* --- Upload Snackbar (NEW) */}
+        <Snackbar 
+            open={uploadModalState.snackbar?.open || false} 
+            autoHideDuration={6000} 
+            onClose={handleCloseUploadSnackbar}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+            <Alert onClose={handleCloseUploadSnackbar} severity={uploadModalState.snackbar?.severity || 'info'} sx={{ width: '100%' }}>
+                {uploadModalState.snackbar?.message}
+            </Alert>
+        </Snackbar>
+
+      </>
+    );
+  }
+
+  return drawerContent;
 } 
