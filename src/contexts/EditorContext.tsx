@@ -2,6 +2,7 @@
 
 import React, { createContext, useState, useContext, ReactNode, useCallback, useEffect, useRef } from 'react';
 import axios from 'axios'; // Import axios
+import { TreeViewBaseItem } from '@mui/x-tree-view/models';
 
 // Base URL for API calls
 // Commented out as API calls should use relative paths for Next.js API routes
@@ -18,9 +19,9 @@ interface Branch {
 type BackendStatus = 'checking' | 'online' | 'offline';
 
 // Define TreeNode structure (needed by Drawer)
-interface TreeNode {
+export interface TreeNode extends TreeViewBaseItem {
     id: string;
-    name: string;
+    label: string;
     type: 'blob' | 'tree';
     path: string;
     children?: TreeNode[];
@@ -66,8 +67,8 @@ interface EditorContextType {
     addFile: (path: string, fileName: string) => Promise<void>;
     addFolder: (path: string, folderName: string) => Promise<void>;
 
-    // Files differing from main
-    differingFiles: string[];
+    // For file highlighting
+    diffWithMain: string[];
 }
 
 const EditorContext = createContext<EditorContextType | undefined>(undefined);
@@ -91,7 +92,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const [folderStructure, setFolderStructure] = useState<TreeNode[]>([]);
     const [isLoadingFolderStructure, setIsLoadingFolderStructure] = useState<boolean>(false);
     const [credentials, setCredentials] = useState<{ githubToken?: string } | null>(null);
-    const [differingFiles, setDifferingFiles] = useState<string[]>([]);
+    const [diffWithMain, setDiffWithMain] = useState<string[]>([]);
 
     // Placeholder implementations for new file operation functions
     const renameItem = async (path: string, newName: string) => {
@@ -116,29 +117,6 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         console.warn('[CONTEXT STUB] addFolder called but not implemented:', { path, folderName });
         return Promise.resolve();
     };
-
-    // --- Function to fetch files differing from main ---
-    const fetchDifferingFiles = useCallback(async (branch: string) => {
-        if (!branch || branch === 'main') {
-            setDifferingFiles([]);
-            return;
-        }
-        console.log(`[EditorContext] Fetching differing files for branch: ${branch}`);
-        try {
-            const response = await fetch(`/api/github/compare-branch?branch=${encodeURIComponent(branch)}&base=main`);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const data = await response.json();
-            if (data.error) {
-                throw new Error(data.error);
-            }
-            setDifferingFiles(data.files || []);
-        } catch (err: any) {
-            console.error('[EditorContext] Failed to fetch differing files:', err.message);
-            setDifferingFiles([]); // Clear on error
-        }
-    }, []);
 
     // Ref to track initial mount
     const isInitialMount = useRef(true);
@@ -219,10 +197,6 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         console.log(`[EditorContext] Fetching folder structure for branch: ${branch}`);
         setIsLoadingFolderStructure(true);
         setError(null);
-
-        // Fetch differing files when folder structure is fetched
-        fetchDifferingFiles(branch);
-
         try {
             // Use relative URL for API route
             const response = await fetch(`/api/github/folder-structure?branch=${encodeURIComponent(branch)}`);
@@ -263,7 +237,31 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         } finally {
             setIsLoadingFolderStructure(false);
         }
-    }, [addRetryAction, checkBackendHealth, fetchDifferingFiles]); // Dependencies
+    }, [addRetryAction, checkBackendHealth]); // Dependencies
+
+    // --- Function to fetch branch diff ---
+    const fetchDiffWithMain = useCallback(async (branch: string) => {
+        if (!branch) {
+            setDiffWithMain([]);
+            return;
+        }
+        console.log(`[EditorContext] Fetching diff from main for branch: ${branch}`);
+        try {
+            const response = await fetch(`/api/github/compare-branches?branch=${encodeURIComponent(branch)}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            setDiffWithMain(data || []);
+        } catch (err: any) {
+            console.error(`[EditorContext] Failed to load diff from main: ${err.message}`);
+            setDiffWithMain([]); // Clear on error
+        }
+    }, []);
 
     const loadFileContent = useCallback(async (filePath: string | null, branchOverride?: string | null) => {
         if (!filePath) {
@@ -336,13 +334,17 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }, [selectedBranch, setIsLoading, setError, setCurrentFilePath, setCurrentFileContent, checkBackendHealth, addRetryAction]); // <-- Added checkBackendHealth and addRetryAction dependencies
 
     const updateSelectedBranch = useCallback((branch: string | null) => {
+        // Clear dependent state immediately
+        setCurrentFilePath(null);
+        setCurrentFileContent(null);
+        setError(null);
+        setFolderStructure([]);
+        setDiffWithMain([]);
+        setHasUnsavedChanges(false);
+
+        // Update the branch, which will trigger the useEffect
         setSelectedBranch(branch);
-        if (!branch) {
-            setCurrentFilePath(null);
-            setCurrentFileContent(null);
-            setError(null);
-        }
-    }, [setCurrentFilePath, setCurrentFileContent, setError]);
+    }, []);
 
     const updateSelectedUser = useCallback((user: string | null) => {
         setSelectedUser(user);
@@ -380,6 +382,19 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setBranchStateCounter(prev => prev + 1);
         console.log("[EditorContext] Incremented branchStateCounter");
     }, []);
+
+    // --- Effect to react to branch changes ---
+    useEffect(() => {
+        if (selectedBranch) {
+            console.log(`[EditorContext] useEffect triggered for branch change: ${selectedBranch}`);
+            fetchFolderStructure(selectedBranch);
+            fetchDiffWithMain(selectedBranch);
+        } else {
+            // Clear data if no branch is selected
+            setFolderStructure([]);
+            setDiffWithMain([]);
+        }
+    }, [selectedBranch, fetchFolderStructure, fetchDiffWithMain]);
 
     // --- Initial Health Check on Mount --- 
     useEffect(() => {
@@ -477,7 +492,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         deleteItem,
         addFile,
         addFolder,
-        differingFiles,
+        diffWithMain,
     };
 
     return (
