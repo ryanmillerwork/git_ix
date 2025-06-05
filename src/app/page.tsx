@@ -107,6 +107,8 @@ export default function Home() {
   const [isDiffing, setIsDiffing] = useState<boolean>(false); 
   const [diffResult, setDiffResult] = useState<string | null>(null); 
   const [isFormatting, setIsFormatting] = useState<boolean>(false); // State for formatting
+  const [isLinting, setIsLinting] = useState<boolean>(false); // State for linting
+  const [editorAnnotations, setEditorAnnotations] = useState([]); // State for editor annotations
 
   useEffect(() => {
     const runTclIntExample = async () => {
@@ -413,6 +415,53 @@ export default function Home() {
     }
   };
 
+  const handleLintCode = async () => {
+    if (!currentFilePath || !localCode) {
+      setSnackbar({ open: true, message: 'No file open or content is empty.', severity: 'warning' });
+      return;
+    }
+
+    const language = currentFilePath.split('.').pop()?.toLowerCase();
+    if (language !== 'tcl') {
+      setSnackbar({ open: true, message: `Linting is only supported for TCL files.`, severity: 'info' });
+      return;
+    }
+
+    setIsLinting(true);
+    setEditorAnnotations([]); // Clear previous annotations
+    try {
+      const response = await fetch('/api/lint-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: localCode, language }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'An unknown linting error occurred.');
+      }
+
+      if (result.issues && result.issues.length > 0) {
+        const annotations = result.issues.map((issue: any) => ({
+          row: issue.line - 1, // Ace editor is 0-indexed
+          column: issue.column - 1,
+          text: issue.message,
+          type: issue.type, // 'error' or 'warning'
+        }));
+        setEditorAnnotations(annotations);
+        setSnackbar({ open: true, message: `Found ${result.issues.length} issue(s).`, severity: 'warning' });
+      } else {
+        setSnackbar({ open: true, message: 'No issues found!', severity: 'success' });
+      }
+
+    } catch (error: any) {
+      setSnackbar({ open: true, message: error.message, severity: 'error' });
+    } finally {
+      setIsLinting(false);
+    }
+  };
+
   return (
     <Box 
       sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)' }}
@@ -463,6 +512,7 @@ export default function Home() {
           width="100%"
           height="100%" 
           fontSize={14}
+          annotations={editorAnnotations}
           showPrintMargin={true}
           showGutter={true}
           highlightActiveLine={true}
@@ -516,6 +566,9 @@ export default function Home() {
             disabled={isLoadingFile || !currentFilePath || !selectedBranch}
           >
             Diff
+          </Button>
+          <Button onClick={handleLintCode} variant="outlined" disabled={!localCode || isLinting} sx={{ ml: 1 }}>
+            {isLinting ? <CircularProgress size={24} /> : 'Lint'}
           </Button>
           <Button onClick={handleFormatCode} variant="outlined" disabled={!localCode || isFormatting} sx={{ ml: 1 }}>
             {isFormatting ? <CircularProgress size={24} /> : 'Format'}
