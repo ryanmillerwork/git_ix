@@ -377,12 +377,14 @@ export default function Home() {
         return;
     }
 
+    const originalCode = localCode; // Keep a copy of the code before formatting.
+
     setIsFormatting(true);
     try {
         const response = await fetch('/api/format-code', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: localCode, language }),
+            body: JSON.stringify({ code: originalCode, language }), // Send original code
         });
 
         const result = await response.json();
@@ -395,11 +397,14 @@ export default function Home() {
 
         const formattedCode = result.formattedCode;
         
-        // Update both the context state and local state
-        updateCurrentFileContentDirectly(formattedCode);
-        setLocalCode(formattedCode);
-
-        setSnackbar({ open: true, message: 'Code formatted successfully!', severity: 'success' });
+        // Compare the formatted code with the original. Only update if it changed.
+        if (formattedCode && formattedCode !== originalCode) {
+            setLocalCode(formattedCode); // This makes it an unsaved change
+            setSnackbar({ open: true, message: 'Code formatted successfully!', severity: 'success' });
+        } else {
+            // If no changes were made, just inform the user.
+            setSnackbar({ open: true, message: 'Code is already formatted.', severity: 'info' });
+        }
 
     } catch (error: any) {
         setSnackbar({ open: true, message: error.message, severity: 'error' });
