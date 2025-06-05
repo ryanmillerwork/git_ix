@@ -291,7 +291,15 @@ export default function Drawer() {
     deleteItem = async (p: string, m: string) => console.warn('[CONTEXT MISSING] deleteItem called:', p, m),
     addFile = async (p: string, f: string) => console.warn('[CONTEXT MISSING] addFile called:', p, f),
     addFolder = async (p: string, f: string) => console.warn('[CONTEXT MISSING] addFolder called:', p, f),
+    diffWithMain,
   } = context;
+
+  // Build a Set of modified file paths for fast lookup
+  const modifiedFiles = new Set(
+    (diffWithMain || [])
+      .filter(entry => entry.status === 'modified')
+      .map(entry => entry.filename)
+  );
 
   // --- Hooks --- 
   const theme = useTheme();
@@ -1334,7 +1342,7 @@ export default function Drawer() {
                   slotProps={{
                     item: (ownerState) => ({
                       'data-id': ownerState.itemId,
-                      style: ownerState.itemId === firstRootId ? { color: 'yellow' } : undefined,
+                      style: modifiedFiles.has(ownerState.itemId) ? { color: 'yellow' } : undefined,
                     } as any),
                   }}
                   sx={{
