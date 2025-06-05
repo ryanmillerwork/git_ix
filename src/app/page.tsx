@@ -98,7 +98,7 @@ export default function Home() {
   // Save action state
   const [commitMessage, setCommitMessage] = useState<string>("");
   const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [saveSnackbar, setSaveSnackbar] = useState<{open: boolean, message: string, severity: "success" | "error" | "warning" | "info"} | null>(null);
+  const [snackbar, setSnackbar] = useState<{open: boolean, message: string, severity: "success" | "error" | "warning" | "info"} | null>(null);
   // Add state for version bump type
   const [versionBumpType, setVersionBumpType] = useState<string>('patch'); 
 
@@ -106,6 +106,7 @@ export default function Home() {
   const [diffTargetBranch, setDiffTargetBranch] = useState<string>(''); 
   const [isDiffing, setIsDiffing] = useState<boolean>(false); 
   const [diffResult, setDiffResult] = useState<string | null>(null); 
+  const [isFormatting, setIsFormatting] = useState<boolean>(false); // State for formatting
 
   useEffect(() => {
     const runTclIntExample = async () => {
@@ -224,20 +225,20 @@ export default function Home() {
 
   const handleConfirmSave = async () => {
     if (!selectedBranch || !currentFilePath || !selectedUser || !password) {
-        setSaveSnackbar({open: true, message: "Branch, User, and Password are required to save.", severity: "error"});
+        setSnackbar({open: true, message: "Branch, User, and Password are required to save.", severity: "error"});
         handleCloseSaveModal();
         return;
     }
 
     if (selectedBranch === 'main') {
-       setSaveSnackbar({open: true, message: "Cannot commit directly to main branch.", severity: "error"});
+       setSnackbar({open: true, message: "Cannot commit directly to main branch.", severity: "error"});
        handleCloseSaveModal();
        return;
     }
 
     setIsSaving(true);
     handleCloseSaveModal();
-    setSaveSnackbar(null);
+    setSnackbar(null);
 
     try {
       const base64Content = Buffer.from(localCode, 'utf-8').toString('base64');
@@ -262,7 +263,7 @@ export default function Home() {
       // Handle potential 207 Multi-Status for commit success but tag failure
       if ((response.status === 200 || response.status === 207) && response.data.success) {
          // Use correct severity type now
-         setSaveSnackbar({open: true, message: response.data.message || "File saved successfully!", severity: response.status === 207 ? "warning" : "success"});
+         setSnackbar({open: true, message: response.data.message || "File saved successfully!", severity: response.status === 207 ? "warning" : "success"});
          // Update context state to reflect the saved content
          updateCurrentFileContentDirectly(localCode);
          updateHasUnsavedChanges(false);
@@ -275,7 +276,7 @@ export default function Home() {
 
     } catch (err: any) {
         console.error("Save error:", err);
-        setSaveSnackbar({open: true, message: `Save failed: ${err.response?.data?.error || err.message || 'Unknown error'}`, severity: "error"});
+        setSnackbar({open: true, message: `Save failed: ${err.response?.data?.error || err.message || 'Unknown error'}`, severity: "error"});
         checkBackendHealth();
     } finally {
         setIsSaving(false);
@@ -308,7 +309,7 @@ export default function Home() {
   const performDiff = async (compareToBranch: string | null) => {
     if (!compareToBranch || !currentFilePath || !selectedBranch) {
       console.error("Missing information for diff");
-      setSaveSnackbar({ open: true, message: 'Missing required information for diff comparison.', severity: 'error' });
+      setSnackbar({ open: true, message: 'Missing required information for diff comparison.', severity: 'error' });
       return;
     }
 
@@ -337,7 +338,7 @@ export default function Home() {
     } catch (err: any) {
       console.error("Diff error:", err);
       const errorMessage = err.response?.data?.error || err.message || 'Failed to generate diff.';
-      setSaveSnackbar({ open: true, message: `Diff failed: ${errorMessage}`, severity: 'error' });
+      setSnackbar({ open: true, message: `Diff failed: ${errorMessage}`, severity: 'error' });
       checkBackendHealth();
     } finally {
       setIsDiffing(false);
@@ -357,11 +358,55 @@ export default function Home() {
     if (reason === 'clickaway') {
       return;
     }
-    setSaveSnackbar(null);
+    setSnackbar(null);
   };
 
   const theme = useTheme();
   const [editorKey, setEditorKey] = useState(0);
+
+  const handleFormatCode = async () => {
+    if (!currentFilePath || !localCode) {
+      setSnackbar({ open: true, message: 'No file open or content is empty.', severity: 'warning' });
+      return;
+    }
+    
+    // Simple language detection from file extension
+    const language = currentFilePath.split('.').pop()?.toLowerCase();
+    if (language !== 'tcl') {
+        setSnackbar({ open: true, message: `Formatting is only supported for TCL files.`, severity: 'info' });
+        return;
+    }
+
+    setIsFormatting(true);
+    try {
+        const response = await fetch('/api/format-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: localCode, language }),
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            // Use details from API response if available
+            const errorMessage = result.details ? `Formatting failed: ${result.details}` : result.error || 'An unknown formatting error occurred.';
+            throw new Error(errorMessage);
+        }
+
+        const formattedCode = result.formattedCode;
+        
+        // Update both the context state and local state
+        updateCurrentFileContentDirectly(formattedCode);
+        setLocalCode(formattedCode);
+
+        setSnackbar({ open: true, message: 'Code formatted successfully!', severity: 'success' });
+
+    } catch (error: any) {
+        setSnackbar({ open: true, message: error.message, severity: 'error' });
+    } finally {
+        setIsFormatting(false);
+    }
+  };
 
   return (
     <Box 
@@ -466,6 +511,9 @@ export default function Home() {
             disabled={isLoadingFile || !currentFilePath || !selectedBranch}
           >
             Diff
+          </Button>
+          <Button onClick={handleFormatCode} variant="outlined" disabled={!localCode || isFormatting} sx={{ ml: 1 }}>
+            {isFormatting ? <CircularProgress size={24} /> : 'Format'}
           </Button>
           <Button 
             variant="contained" 
@@ -646,17 +694,17 @@ export default function Home() {
 
       {/* Snackbar for Save Status (and now Diff errors) */}
       <Snackbar 
-        open={saveSnackbar?.open || false} 
+        open={snackbar?.open || false} 
         autoHideDuration={6000} 
         onClose={handleCloseSnackbar}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
         <Alert 
             onClose={handleCloseSnackbar} 
-            severity={saveSnackbar?.severity || 'info'} 
+            severity={snackbar?.severity || 'info'} 
             sx={{ width: '100%' }}
         >
-          {saveSnackbar?.message}
+          {snackbar?.message}
         </Alert>
       </Snackbar>
 
