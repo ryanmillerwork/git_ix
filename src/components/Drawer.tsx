@@ -1267,6 +1267,9 @@ export default function Drawer() {
     handleCloseContextMenu();
   };
 
+  // Get the first root node id for yellow styling
+  const firstRootId = treeData[0]?.id;
+
   return (
     <>
       {/* Revert IconButton Style */}
@@ -1331,6 +1334,7 @@ export default function Drawer() {
                   slotProps={{
                     item: (ownerState) => ({
                       'data-id': ownerState.itemId,
+                      style: ownerState.itemId === firstRootId ? { color: 'yellow' } : undefined,
                     } as any),
                   }}
                   sx={{
