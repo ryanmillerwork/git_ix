@@ -60,10 +60,21 @@ export async function POST(request: Request) {
     
     // Provide specific error feedback if tclfmt fails due to syntax issues
     if (error.stderr) {
+      const stderrString = error.stderr.toString();
+      let finalError = 'Failed to format code. Check for syntax errors.';
+
+      // Try to find the specific TclSyntaxError message from the traceback.
+      const match = stderrString.match(/TclSyntaxError: (.*)/);
+      if (match && match[1]) {
+        // Capitalize first letter for better presentation
+        const message = match[1].trim();
+        finalError = `Syntax Error: ${message.charAt(0).toUpperCase() + message.slice(1)}`;
+      }
+
       return NextResponse.json(
         { 
-          error: 'Failed to format code. Check for syntax errors.', 
-          details: error.stderr 
+          error: 'Formatting Failed', 
+          details: finalError // Send the parsed, user-friendly error
         }, 
         { status: 400 } // Bad Request, since the input code was likely invalid
       );
