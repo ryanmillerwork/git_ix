@@ -295,16 +295,35 @@ export default function Drawer() {
   } = context;
 
   // Build a Set of changed file paths for fast lookup (any status)
-  const highlightedFiles = new Set(
+  const allHighlightedFiles = new Set(
     (diffWithMain || [])
       .filter(entry => ['added', 'removed', 'modified', 'renamed'].includes(entry.status))
       .map(entry => entry.filename)
   );
 
+  // Create a set of all file paths that exist in the current tree
+  const currentTreeFiles = new Set<string>();
+  function collectFilePaths(nodes: TreeNode[]) {
+    nodes.forEach(node => {
+      currentTreeFiles.add(node.id);
+      if (node.children) {
+        collectFilePaths(node.children);
+      }
+    });
+  }
+  collectFilePaths(treeData);
+
+  // Only highlight files that exist in the current tree
+  const highlightedFiles = new Set(
+    Array.from(allHighlightedFiles).filter(filePath => currentTreeFiles.has(filePath))
+  );
+
   // Debug: Log highlighted files
-  if (highlightedFiles.size > 0) {
-    console.log(`[Drawer] Highlighted files (${highlightedFiles.size}):`, Array.from(highlightedFiles));
-    console.log(`[Drawer] Full list of highlighted files:`);
+  if (allHighlightedFiles.size > 0) {
+    console.log(`[Drawer] All diff files (${allHighlightedFiles.size}):`, Array.from(allHighlightedFiles));
+    console.log(`[Drawer] Files in current tree (${currentTreeFiles.size}):`, Array.from(currentTreeFiles));
+    console.log(`[Drawer] Highlighted files in current tree (${highlightedFiles.size}):`, Array.from(highlightedFiles));
+    console.log(`[Drawer] Full list of highlighted files in current tree:`);
     Array.from(highlightedFiles).forEach((file, index) => {
       console.log(`  ${index + 1}. ${file}`);
     });
@@ -1294,10 +1313,12 @@ export default function Drawer() {
     if (!node.children) return false;
     
     for (const child of node.children) {
+      // Only check files that actually exist in the current tree
       if (highlightedFiles.has(child.id)) {
         console.log(`[Drawer] Folder ${node.id} highlighted because child ${child.id} is in highlightedFiles`);
         return true;
       }
+      // Recursively check subfolders
       if (child.isFolder && folderContainsHighlightedFile(child)) {
         console.log(`[Drawer] Folder ${node.id} highlighted because descendant folder ${child.id} contains highlighted files`);
         return true;
