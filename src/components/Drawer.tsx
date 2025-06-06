@@ -1436,7 +1436,10 @@ export default function Drawer() {
                       
                       return {
                         'data-id': ownerState.itemId,
-                        style: isHighlighted ? { color: 'yellow' } : undefined,
+                        style: isHighlighted ? { 
+                          backgroundColor: 'rgba(255, 255, 0, 0.2)', // Yellow background instead of text color
+                          color: 'inherit' // Ensure text color doesn't change
+                        } : undefined,
                       } as any;
                     },
                   }}
