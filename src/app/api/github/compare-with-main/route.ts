@@ -35,9 +35,19 @@ export async function GET(request: Request) {
         additions: file.additions,
         deletions: file.deletions,
         changes: file.changes,
+        patch: file.patch,
     }));
 
     console.log('[API /github/compare-with-main] diff_with_main:', diff_with_main);
+    
+    diff_with_main?.forEach((file: any) => {
+      if (file.changes > 0 && file.additions === 0) {
+        console.log(`[API /github/compare-with-main] DEBUG: File ${file.filename} has ${file.deletions} deletions, ${file.changes} changes, but 0 additions`);
+        console.log(`[API /github/compare-with-main] DEBUG: Patch content for ${file.filename}:`);
+        console.log(file.patch || 'No patch content available');
+        console.log(`[API /github/compare-with-main] DEBUG: End patch for ${file.filename}`);
+      }
+    });
 
     return NextResponse.json({ diff_with_main });
   } catch (error: unknown) {
