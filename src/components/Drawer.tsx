@@ -318,17 +318,6 @@ export default function Drawer() {
     Array.from(allHighlightedFiles).filter(filePath => currentTreeFiles.has(filePath))
   );
 
-  // Debug: Log highlighted files
-  if (allHighlightedFiles.size > 0) {
-    console.log(`[Drawer] All diff files (${allHighlightedFiles.size}):`, Array.from(allHighlightedFiles));
-    console.log(`[Drawer] Files in current tree (${currentTreeFiles.size}):`, Array.from(currentTreeFiles));
-    console.log(`[Drawer] Highlighted files in current tree (${highlightedFiles.size}):`, Array.from(highlightedFiles));
-    console.log(`[Drawer] Full list of highlighted files in current tree:`);
-    Array.from(highlightedFiles).forEach((file, index) => {
-      console.log(`  ${index + 1}. ${file}`);
-    });
-  }
-
   // --- Hooks --- 
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -1309,35 +1298,17 @@ export default function Drawer() {
 
   // Helper to check if a folder contains any highlighted file
   function folderContainsHighlightedFile(node: TreeNode): boolean {
-    console.log(`[Drawer] folderContainsHighlightedFile checking: ${node.id}, isFolder: ${node.isFolder}, hasChildren: ${!!node.children}, childCount: ${node.children?.length || 0}`);
-    
-    if (!node.isFolder) {
-      console.log(`[Drawer] ${node.id} not a folder, returning false`);
-      return false;
-    }
-    if (!node.children) {
-      console.log(`[Drawer] ${node.id} has no children, returning false`);
-      return false;
-    }
-    
-    console.log(`[Drawer] ${node.id} children:`, node.children.map(c => c.id));
+    if (!node.isFolder) return false;
+    if (!node.children) return false;
     
     for (const child of node.children) {
-      console.log(`[Drawer] Checking child ${child.id}, inHighlightedFiles: ${highlightedFiles.has(child.id)}, isFolder: ${child.isFolder}`);
-      
-      // Only check files that actually exist in the current tree
       if (highlightedFiles.has(child.id)) {
-        console.log(`[Drawer] Folder ${node.id} highlighted because child ${child.id} is in highlightedFiles`);
         return true;
       }
-      // Recursively check subfolders
       if (child.isFolder && folderContainsHighlightedFile(child)) {
-        console.log(`[Drawer] Folder ${node.id} highlighted because descendant folder ${child.id} contains highlighted files`);
         return true;
       }
     }
-    
-    console.log(`[Drawer] ${node.id} contains no highlighted files, returning false`);
     return false;
   }
 
@@ -1404,35 +1375,11 @@ export default function Drawer() {
                   onContextMenu={handleContextMenu}
                   slotProps={{
                     item: (ownerState) => {
-                      // Log EVERY item being processed
-                      console.log(`[Drawer] Processing item: ${ownerState.itemId}`);
-                      
                       // Find the node in treeData by id
                       const node = findNodeById(treeData, ownerState.itemId);
                       const isDirectlyHighlighted = highlightedFiles.has(ownerState.itemId);
                       const isFolderWithHighlightedContent = node && node.isFolder && folderContainsHighlightedFile(node);
                       const isHighlighted = isDirectlyHighlighted || isFolderWithHighlightedContent;
-                      
-                      // Log detailed info for EVERY item
-                      console.log(`[Drawer] Item ${ownerState.itemId}: type=${node?.type}, directly=${isDirectlyHighlighted}, folder=${isFolderWithHighlightedContent}, final=${isHighlighted}`);
-                      
-                      // Debug logging for highlighting decisions
-                      if (isHighlighted) {
-                        const reason = isDirectlyHighlighted 
-                          ? 'directly in highlightedFiles' 
-                          : 'folder contains highlighted descendants';
-                        console.log(`[Drawer] Highlighting ${ownerState.itemId} (${node?.type}) because: ${reason}`);
-                      }
-                      
-                      // Additional logging for search directory items
-                      if (ownerState.itemId.startsWith('search/') || ownerState.itemId === 'search') {
-                        console.log(`[Drawer] Search item ${ownerState.itemId} (${node?.type}): directly=${isDirectlyHighlighted}, folder=${isFolderWithHighlightedContent}, final=${isHighlighted}`);
-                      }
-                      
-                      // Log ALL items that get yellow styling
-                      if (isHighlighted) {
-                        console.log(`[Drawer] YELLOW STYLE applied to: ${ownerState.itemId} (${node?.type})`);
-                      }
                       
                       return {
                         'data-id': ownerState.itemId,

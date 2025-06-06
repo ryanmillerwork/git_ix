@@ -35,8 +35,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Branch parameter is required' }, { status: 400 });
   }
 
-  console.log(`[API /github/compare-with-main] Comparing tree state of branch '${branch}' with main.`);
-
   try {
     // Get main branch tree
     const mainBranchResponse = await axios.get(
@@ -52,9 +50,6 @@ export async function GET(request: Request) {
     );
     const branchCommitSha = branchResponse.data.commit.sha;
 
-    console.log(`[API /github/compare-with-main] Main commit SHA: ${mainCommitSha}`);
-    console.log(`[API /github/compare-with-main] Branch commit SHA: ${branchCommitSha}`);
-
     // Get recursive trees for both branches
     const [mainTreeResponse, branchTreeResponse] = await Promise.all([
       axios.get(
@@ -69,9 +64,6 @@ export async function GET(request: Request) {
 
     const mainTree: TreeItem[] = mainTreeResponse.data.tree;
     const branchTree: TreeItem[] = branchTreeResponse.data.tree;
-
-    console.log(`[API /github/compare-with-main] Main tree has ${mainTree.length} items`);
-    console.log(`[API /github/compare-with-main] Branch tree has ${branchTree.length} items`);
 
     // Create maps for fast lookup
     const mainFiles = new Map<string, TreeItem>();
@@ -120,9 +112,6 @@ export async function GET(request: Request) {
       }
       // If mainFile.sha === branchFile.sha, files are identical - no difference
     }
-
-    console.log(`[API /github/compare-with-main] Found ${differences.length} actual differences`);
-    console.log('[API /github/compare-with-main] differences:', differences);
 
     // Convert to format compatible with existing UI
     const diff_with_main = differences.map(diff => ({

@@ -159,33 +159,6 @@ export async function POST(request: Request) {
         await axios.patch(updateRefUrl, { sha: newCommitSha }, { headers: githubAuthHeaders });
         console.log(`[API /github/copy-files][TreeCopy] Branch ref for ${targetBranch} updated successfully.`);
 
-        // --- Debug: Fetch and log blob SHA and mode for each copied file on both branches ---
-        for (const file of treeChanges) {
-            try {
-                // Source branch
-                const srcResp = await axios.get(`${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(file.path)}?ref=${encodeURIComponent(sourceBranch)}`, { headers: githubAuthHeaders });
-                // Target branch
-                const tgtResp = await axios.get(`${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(file.path)}?ref=${encodeURIComponent(targetBranch)}`, { headers: githubAuthHeaders });
-                console.log(`[API /github/copy-files][DEBUG] File: ${file.path}`);
-                console.log(`  Source branch (${sourceBranch}): sha=${srcResp.data.sha}, mode=${srcResp.data.mode}`);
-                console.log(`  Target branch (${targetBranch}): sha=${tgtResp.data.sha}, mode=${tgtResp.data.mode}`);
-            } catch (e) {
-                let msg = '';
-                if (e && typeof e === 'object') {
-                  if ('message' in e && typeof (e as any).message === 'string') {
-                    msg = (e as any).message;
-                  } else if ('toString' in e) {
-                    msg = (e as any).toString();
-                  } else {
-                    msg = JSON.stringify(e);
-                  }
-                } else {
-                  msg = String(e);
-                }
-                console.warn(`[API /github/copy-files][DEBUG] Could not fetch blob info for ${file.path}:`, msg);
-            }
-        }
-
         return { success: true, someFilesCopied: true, results: copyResults, newCommitSha, message: "Copy successful." };
 
     } catch (error: unknown) {

@@ -4,11 +4,19 @@
 
 ## Features
 
-*   **Repository Browsing:** View folder structures and file contents.
+*   **Repository Browsing:** View folder structures and file contents with accurate change highlighting.
 *   **File Operations:** Add, rename, copy, and view diffs for files.
 *   **Branch Management:** Create, view, revert, and retire branches.
 *   **Committing:** Commit changes directly to the repository.
 *   **GitHub Integration:** Leverages the GitHub API for all repository operations.
+*   **Advanced File Copying:** 
+    *   Uses Git Data API with tree manipulation to preserve file blob SHAs.
+    *   Ensures copied files are byte-for-byte identical to source files.
+    *   Supports both intra-branch and inter-branch copying.
+*   **Accurate Change Detection:**
+    *   Tree-based comparison compares actual current file states (blob SHAs) rather than historical diffs.
+    *   Eliminates false positives where files appear "different" but are actually identical.
+    *   Visual highlighting only shows truly different files and their parent directories.
 *   **User Management & Permissions (via PostgreSQL):** 
     *   Connects to a PostgreSQL database to manage users (`username`, `email`, hashed `password`).
     *   Controls user access based on an `active` status flag.
@@ -16,6 +24,28 @@
 *   **Code Quality Tools (TCL):**
     *   **Linting:** A "Lint" button in the editor view runs `tclint` on the current TCL code. Issues are displayed as annotations directly in the editor.
     *   **Formatting:** A "Format" button uses `tclfmt` to automatically format TCL code according to style guidelines.
+
+## Key Technical Improvements
+
+### Enhanced File Comparison System
+The application now uses a **tree-based comparison system** that directly compares blob SHAs between branches rather than relying on GitHub's historical compare API. This provides several benefits:
+
+- **Accurate Current State Comparison**: Shows only files that are actually different in their current state
+- **No Historical Noise**: Eliminates false positives from files that were modified in branch history but are now identical
+- **Precise Visual Highlighting**: Only highlights truly different files and their parent directories
+
+### SHA-Preserving File Copy Operations
+File copying operations now use the **Git Data API with tree manipulation** instead of the Contents API:
+
+- **Preserves File Hashes**: Copied files maintain their original blob SHAs, ensuring byte-for-byte identical content
+- **Atomic Operations**: Uses `base_tree` parameter for efficient, atomic tree updates
+- **Better Performance**: Single API call replaces multiple file-by-file operations
+- **Maintains Git History Integrity**: Preserves the relationship between identical files across branches
+
+### Implementation Details
+- **Compare API**: `/api/github/compare-with-main` now fetches complete recursive trees and compares blob SHAs directly
+- **Copy API**: `/api/github/copy-files` uses Git tree manipulation with preserved blob references
+- **UI Highlighting**: Filtered highlighting logic ensures only files present in the current branch are considered for highlighting
 
 ## API Endpoints
 
@@ -27,9 +57,10 @@ The application exposes several API endpoints under `/api/github/` to handle Git
 *   `/api/github/commits`: List commits for a branch.
 *   `/api/github/commit-file`: Commit changes to a file.
 *   `/api/github/diff-file`: Show differences for a file.
+*   `/api/github/compare-with-main`: **Enhanced** - Compare current tree states using blob SHA comparison.
 *   `/api/github/add-file`, `/api/github/add-folder`: Add new files/folders.
 *   `/api/github/rename-item`: Rename files or folders.
-*   `/api/github/copy-item-intra-branch`, `/api/github/copy-files`: Copy files/folders within or between branches.
+*   `/api/github/copy-item-intra-branch`, `/api/github/copy-files`: **Enhanced** - Copy files/folders using Git Data API with SHA preservation.
 *   `/api/github/upload-files`: Upload files to the repository.
 *   `/api/github/create-branch`, `/api/github/revert-branch`, `/api/github/retire-branch`: Branch lifecycle management.
 
