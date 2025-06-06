@@ -1309,10 +1309,22 @@ export default function Drawer() {
 
   // Helper to check if a folder contains any highlighted file
   function folderContainsHighlightedFile(node: TreeNode): boolean {
-    if (!node.isFolder) return false;
-    if (!node.children) return false;
+    console.log(`[Drawer] folderContainsHighlightedFile checking: ${node.id}, isFolder: ${node.isFolder}, hasChildren: ${!!node.children}, childCount: ${node.children?.length || 0}`);
+    
+    if (!node.isFolder) {
+      console.log(`[Drawer] ${node.id} not a folder, returning false`);
+      return false;
+    }
+    if (!node.children) {
+      console.log(`[Drawer] ${node.id} has no children, returning false`);
+      return false;
+    }
+    
+    console.log(`[Drawer] ${node.id} children:`, node.children.map(c => c.id));
     
     for (const child of node.children) {
+      console.log(`[Drawer] Checking child ${child.id}, inHighlightedFiles: ${highlightedFiles.has(child.id)}, isFolder: ${child.isFolder}`);
+      
       // Only check files that actually exist in the current tree
       if (highlightedFiles.has(child.id)) {
         console.log(`[Drawer] Folder ${node.id} highlighted because child ${child.id} is in highlightedFiles`);
@@ -1324,6 +1336,8 @@ export default function Drawer() {
         return true;
       }
     }
+    
+    console.log(`[Drawer] ${node.id} contains no highlighted files, returning false`);
     return false;
   }
 
