@@ -1409,6 +1409,11 @@ export default function Drawer() {
                         console.log(`[Drawer] Search item ${ownerState.itemId} (${node?.type}): directly=${isDirectlyHighlighted}, folder=${isFolderWithHighlightedContent}, final=${isHighlighted}`);
                       }
                       
+                      // Log ALL items that get yellow styling
+                      if (isHighlighted) {
+                        console.log(`[Drawer] YELLOW STYLE applied to: ${ownerState.itemId} (${node?.type})`);
+                      }
+                      
                       return {
                         'data-id': ownerState.itemId,
                         style: isHighlighted ? { color: 'yellow' } : undefined,
