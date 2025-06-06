@@ -430,22 +430,22 @@ export default function Drawer() {
 
     setIsCopying(true);
     handleCloseCopyModal(); 
-    setCopySnackbar({ open: true, message: `Copying ${selectedItems.length} item(s)...`, severity: "info"});
+    setCopySnackbar({ open: true, message: `Copying selected item(s)...`, severity: "info"});
 
-    // Filter selectedItems using local treeData
+    // Filter selectedItems to only include blobs (files)
     const filesToCopy = selectedItems.filter(id => {
-        const node = findNodeById(treeData, id); // Use local treeData
+        const node = findNodeById(treeData, id);
         return node?.type === 'blob';
     });
 
     if (filesToCopy.length === 0) {
-         setCopySnackbar({open: true, message: "No files selected to copy.", severity: "info"});
+         setCopySnackbar({open: true, message: "No files selected to copy. Please select one or more files.", severity: "info"});
          setIsCopying(false);
          return;
     }
 
     try {
-        const response = await axios.post(`/api/github/copy-files`, {
+        const apiResponse = await axios.post(`/api/github/copy-files`, {
             username: context.selectedUser,
             password: context.password,
             source_branch: context.selectedBranch,
@@ -453,25 +453,26 @@ export default function Drawer() {
             paths: filesToCopy
         });
         
-        // Process results for a more informative message
-        let successCount = 0;
-        let errorCount = 0;
-        let skippedCount = 0;
-        if (response.data.success && Array.isArray(response.data.results)) {
-            response.data.results.forEach((result: any) => {
-                 if (result.status === 'created' || result.status === 'updated') successCount++;
-                 else if (result.status === 'skipped') skippedCount++;
-                 else errorCount++;
-            });
-        }
+        console.log("Copy API Response:", apiResponse.data);
 
-        let message = `Copy finished. Success: ${successCount}, Failed: ${errorCount}, Skipped: ${skippedCount}.`;
-        setCopySnackbar({open: true, message: message, severity: errorCount > 0 ? "warning" : "success"}); 
-        console.log("Copy results:", response.data.results);
+        // The API now provides a clear success flag and a comprehensive message.
+        // A status of 207 indicates partial success (e.g., copy ok, but tagging failed).
+        const isSuccess = apiResponse.data.success;
+        const severity = isSuccess ? (apiResponse.status === 207 ? "warning" : "success") : "error";
+        const message = apiResponse.data.message || (isSuccess ? "Operation completed successfully." : "An unknown error occurred.");
+
+        setCopySnackbar({ open: true, message, severity });
+
+        // On success, trigger a refresh of the tree data
+        if (isSuccess) {
+            console.log("Copy successful, refreshing tree data.");
+            fetchTreeData(context.selectedBranch);
+        }
 
     } catch (err: any) {
         console.error("Copy error:", err);
-        setCopySnackbar({open: true, message: `Copy failed: ${err.response?.data?.error || err.message || 'Unknown error'}`, severity: "error"});
+        const errorMsg = err.response?.data?.error || err.message || 'Unknown error';
+        setCopySnackbar({open: true, message: `Copy failed: ${errorMsg}`, severity: "error"});
     } finally {
         setIsCopying(false);
     }
