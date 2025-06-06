@@ -304,6 +304,10 @@ export default function Drawer() {
   // Debug: Log highlighted files
   if (highlightedFiles.size > 0) {
     console.log(`[Drawer] Highlighted files (${highlightedFiles.size}):`, Array.from(highlightedFiles));
+    console.log(`[Drawer] Full list of highlighted files:`);
+    Array.from(highlightedFiles).forEach((file, index) => {
+      console.log(`  ${index + 1}. ${file}`);
+    });
   }
 
   // --- Hooks --- 
