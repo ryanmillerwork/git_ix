@@ -301,6 +301,11 @@ export default function Drawer() {
       .map(entry => entry.filename)
   );
 
+  // Debug: Log highlighted files
+  if (highlightedFiles.size > 0) {
+    console.log(`[Drawer] Highlighted files (${highlightedFiles.size}):`, Array.from(highlightedFiles));
+  }
+
   // --- Hooks --- 
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -1283,9 +1288,16 @@ export default function Drawer() {
   function folderContainsHighlightedFile(node: TreeNode): boolean {
     if (!node.isFolder) return false;
     if (!node.children) return false;
+    
     for (const child of node.children) {
-      if (highlightedFiles.has(child.id)) return true;
-      if (child.isFolder && folderContainsHighlightedFile(child)) return true;
+      if (highlightedFiles.has(child.id)) {
+        console.log(`[Drawer] Folder ${node.id} highlighted because child ${child.id} is in highlightedFiles`);
+        return true;
+      }
+      if (child.isFolder && folderContainsHighlightedFile(child)) {
+        console.log(`[Drawer] Folder ${node.id} highlighted because descendant folder ${child.id} contains highlighted files`);
+        return true;
+      }
     }
     return false;
   }
@@ -1356,6 +1368,15 @@ export default function Drawer() {
                       // Find the node in treeData by id
                       const node = findNodeById(treeData, ownerState.itemId);
                       const isHighlighted = highlightedFiles.has(ownerState.itemId) || (node && node.isFolder && folderContainsHighlightedFile(node));
+                      
+                      // Debug logging for highlighting decisions
+                      if (isHighlighted) {
+                        const reason = highlightedFiles.has(ownerState.itemId) 
+                          ? 'directly in highlightedFiles' 
+                          : 'folder contains highlighted descendants';
+                        console.log(`[Drawer] Highlighting ${ownerState.itemId} (${node?.type}) because: ${reason}`);
+                      }
+                      
                       return {
                         'data-id': ownerState.itemId,
                         style: isHighlighted ? { color: 'yellow' } : undefined,
