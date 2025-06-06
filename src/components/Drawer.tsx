@@ -1392,14 +1392,21 @@ export default function Drawer() {
                     item: (ownerState) => {
                       // Find the node in treeData by id
                       const node = findNodeById(treeData, ownerState.itemId);
-                      const isHighlighted = highlightedFiles.has(ownerState.itemId) || (node && node.isFolder && folderContainsHighlightedFile(node));
+                      const isDirectlyHighlighted = highlightedFiles.has(ownerState.itemId);
+                      const isFolderWithHighlightedContent = node && node.isFolder && folderContainsHighlightedFile(node);
+                      const isHighlighted = isDirectlyHighlighted || isFolderWithHighlightedContent;
                       
                       // Debug logging for highlighting decisions
                       if (isHighlighted) {
-                        const reason = highlightedFiles.has(ownerState.itemId) 
+                        const reason = isDirectlyHighlighted 
                           ? 'directly in highlightedFiles' 
                           : 'folder contains highlighted descendants';
                         console.log(`[Drawer] Highlighting ${ownerState.itemId} (${node?.type}) because: ${reason}`);
+                      }
+                      
+                      // Additional logging for search directory items
+                      if (ownerState.itemId.startsWith('search/') || ownerState.itemId === 'search') {
+                        console.log(`[Drawer] Search item ${ownerState.itemId} (${node?.type}): directly=${isDirectlyHighlighted}, folder=${isFolderWithHighlightedContent}, final=${isHighlighted}`);
                       }
                       
                       return {
