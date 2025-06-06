@@ -76,14 +76,15 @@ export async function POST(request: Request) {
             return response.data.tree.sha;
         };
 
-        // Helper to get a full recursive tree
-        const getRecursiveTree = async (treeSha: string) => {
+        // Helper to get a full recursive tree from the source branch
+        const getRecursiveSourceTree = async (commitSha: string) => {
+            const treeSha = await getCommitTreeSha(commitSha);
             const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/trees/${treeSha}?recursive=1`;
             const response = await axios.get(url, { headers: githubAuthHeaders });
             if (response.data.truncated) {
-                console.warn(`[API /github/copy-files] Warning: Tree data for ${treeSha} was truncated. This might cause issues with very large repositories.`);
+                console.warn(`[API /github/copy-files] Warning: Source tree data for ${treeSha} was truncated. Some files may not be copied if the repository is very large.`);
             }
-            return response.data.tree as { path: string, mode: string, type: 'blob' | 'tree', sha: string, size?: number, url?: string }[];
+            return response.data.tree as { path: string, mode: string, type: 'blob' | 'tree', sha: string }[];
         };
 
         // 1. Get branch info
@@ -92,65 +93,71 @@ export async function POST(request: Request) {
         const targetCommit = await getBranchCommit(targetBranch);
         const parentCommitSha = targetCommit.sha;
 
-        // 2. & 3. Get Source and Target Trees
-        console.log(`[API /github/copy-files][TreeCopy] Fetching source and target trees...`);
-        const sourceTreeSha = await getCommitTreeSha(sourceCommit.sha);
-        const targetTreeSha = await getCommitTreeSha(parentCommitSha);
+        // 2. Get the SHA of the target branch's tree to use as the base.
+        console.log(`[API /github/copy-files][TreeCopy] Getting base tree SHA from target branch ${targetBranch}...`);
+        const baseTreeSha = await getCommitTreeSha(parentCommitSha);
         
-        const sourceTree = await getRecursiveTree(sourceTreeSha);
-        const targetTree = await getRecursiveTree(targetTreeSha);
+        // 3. Get the source tree to find the blobs we want to copy.
+        console.log(`[API /github/copy-files][TreeCopy] Getting source tree...`);
+        const sourceTree = await getRecursiveSourceTree(sourceCommit.sha);
 
-        // 4. Construct a new tree definition
+        // 4. Construct the `tree` parameter for the API call.
+        // This will only contain the files we want to add or update.
         console.log(`[API /github/copy-files][TreeCopy] Constructing new tree definition...`);
-        const sourceFilesData = new Map<string, {path: string, mode: string, type: 'blob', sha: string}>();
-        for (const item of sourceTree) {
-            if (item.type === 'blob' && filePaths.includes(item.path)) {
-                sourceFilesData.set(item.path, { path: item.path, mode: item.mode, type: 'blob', sha: item.sha });
+        const treeChanges: { path: string, mode: string, type: 'blob', sha: string }[] = [];
+        const sourceFileMap = new Map(sourceTree.map(item => [item.path, item]));
+
+        for (const filePath of filePaths) {
+            const sourceFile = sourceFileMap.get(filePath);
+            if (sourceFile && sourceFile.type === 'blob') {
+                treeChanges.push({
+                    path: sourceFile.path,
+                    mode: sourceFile.mode,
+                    type: 'blob',
+                    sha: sourceFile.sha,
+                });
             }
         }
-
-        const foundPaths = new Set(sourceFilesData.keys());
         
-        // Build the results array for the final response
+        // Build a report of what was done
         const copyResults: { path: string; status: string; reason?: string }[] = [];
-        const targetFilePaths = new Set(targetTree.map(item => item.path));
+        // Note: We can't easily know if a file was 'created' or 'updated' without fetching the target tree,
+        // which we are avoiding. We'll simply report 'copied'. A more advanced check could be added if needed.
         filePaths.forEach((p: string) => {
-            if (foundPaths.has(p)) {
-                copyResults.push({ path: p, status: targetFilePaths.has(p) ? 'updated' : 'created' });
+            if (sourceFileMap.has(p) && sourceFileMap.get(p)?.type === 'blob') {
+                copyResults.push({ path: p, status: 'copied' });
             } else {
-                copyResults.push({ path: p, status: 'skipped', reason: 'File not found in source branch' });
+                copyResults.push({ path: p, status: 'skipped', reason: 'File not found or is not a blob in source branch' });
             }
         });
-        
-        const someFilesCopied = foundPaths.size > 0;
+
+        const someFilesCopied = treeChanges.length > 0;
         if (!someFilesCopied) {
             return { success: true, someFilesCopied: false, results: copyResults, newCommitSha: null, message: "No eligible files found to copy." };
         }
-
-        const newTreeMap = new Map<string, {path: string, mode: string, type: string, sha: string | null}>();
-        for (const item of targetTree) {
-            newTreeMap.set(item.path, { path: item.path, mode: item.mode, type: item.type, sha: item.sha });
-        }
-        for (const [, data] of sourceFilesData.entries()) {
-            newTreeMap.set(data.path, data);
-        }
         
-        // 5. Create the new tree object
+        // 5. Create the new tree object using the base_tree parameter.
         const createTreeUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/trees`;
-        const createTreePayload = { tree: Array.from(newTreeMap.values()) };
+        const createTreePayload = {
+            base_tree: baseTreeSha,
+            tree: treeChanges,
+        };
         const createTreeResp = await axios.post(createTreeUrl, createTreePayload, { headers: githubAuthHeaders });
         const newTreeSha = createTreeResp.data.sha;
+        console.log(`[API /github/copy-files][TreeCopy] New tree created. SHA: ${newTreeSha}`);
 
         // 6. Create a new commit
         const createCommitUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/commits`;
-        const commitMessage = `Copy ${foundPaths.size} file(s) from ${sourceBranch} [author: ${commitUsername}]`;
+        const commitMessage = `Copy ${treeChanges.length} file(s) from ${sourceBranch} [author: ${commitUsername}]`;
         const createCommitPayload = { message: commitMessage, tree: newTreeSha, parents: [parentCommitSha] };
         const createCommitResp = await axios.post(createCommitUrl, createCommitPayload, { headers: githubAuthHeaders });
         const newCommitSha = createCommitResp.data.sha;
+        console.log(`[API /github/copy-files][TreeCopy] New commit created. SHA: ${newCommitSha}`);
 
         // 7. Update the target branch reference
         const updateRefUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/refs/heads/${encodeURIComponent(targetBranch)}`;
         await axios.patch(updateRefUrl, { sha: newCommitSha }, { headers: githubAuthHeaders });
+        console.log(`[API /github/copy-files][TreeCopy] Branch ref for ${targetBranch} updated successfully.`);
 
         return { success: true, someFilesCopied: true, results: copyResults, newCommitSha, message: "Copy successful." };
 
@@ -221,7 +228,7 @@ export async function POST(request: Request) {
             const prUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls`;
             const prPayload = {
                 title: `Copy files from ${source_branch} to main by ${username}`,
-                body: `Automated PR to copy ${copyOperationResult.results.filter(r => r.status === 'created' || r.status === 'updated').length} file(s) from branch '${source_branch}' to 'main'. Initiated by ${username}.\n\nCopied files:\n${copyOperationResult.results.filter(r => r.status === 'created' || r.status === 'updated').map(r => `- ${r.path}`).join('\n')}\n\nSkipped files:\n${copyOperationResult.results.filter(r => r.status === 'skipped').map(r => `- ${r.path} (${r.reason || 'unknown'})`).join('\n')}`,
+                body: `Automated PR to copy ${copyOperationResult.results.filter(r => r.status === 'copied').length} file(s) from branch '${source_branch}' to 'main'. Initiated by ${username}.\n\nCopied files:\n${copyOperationResult.results.filter(r => r.status === 'copied').map(r => `- ${r.path}`).join('\n')}\n\nSkipped files:\n${copyOperationResult.results.filter(r => r.status === 'skipped').map(r => `- ${r.path} (${r.reason || 'unknown'})`).join('\n')}`,
                 head: tempBranchName,
                 base: 'main'
             };
