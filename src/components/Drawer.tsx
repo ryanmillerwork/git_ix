@@ -294,10 +294,10 @@ export default function Drawer() {
     diffWithMain,
   } = context;
 
-  // Build a Set of modified file paths for fast lookup
-  const modifiedFiles = new Set(
+  // Build a Set of changed file paths for fast lookup (any status)
+  const highlightedFiles = new Set(
     (diffWithMain || [])
-      .filter(entry => entry.status === 'modified')
+      .filter(entry => ['added', 'removed', 'modified', 'renamed'].includes(entry.status))
       .map(entry => entry.filename)
   );
 
@@ -1278,6 +1278,17 @@ export default function Drawer() {
   // Get the first root node id for yellow styling
   const firstRootId = treeData[0]?.id;
 
+  // Helper to check if a folder contains any highlighted file
+  function folderContainsHighlightedFile(node: TreeNode): boolean {
+    if (!node.isFolder) return false;
+    if (!node.children) return false;
+    for (const child of node.children) {
+      if (highlightedFiles.has(child.id)) return true;
+      if (child.isFolder && folderContainsHighlightedFile(child)) return true;
+    }
+    return false;
+  }
+
   return (
     <>
       {/* Revert IconButton Style */}
@@ -1340,10 +1351,15 @@ export default function Drawer() {
                   onItemClick={handleItemClick}
                   onContextMenu={handleContextMenu}
                   slotProps={{
-                    item: (ownerState) => ({
-                      'data-id': ownerState.itemId,
-                      style: modifiedFiles.has(ownerState.itemId) ? { color: 'yellow' } : undefined,
-                    } as any),
+                    item: (ownerState) => {
+                      // Find the node in treeData by id
+                      const node = findNodeById(treeData, ownerState.itemId);
+                      const isHighlighted = highlightedFiles.has(ownerState.itemId) || (node && node.isFolder && folderContainsHighlightedFile(node));
+                      return {
+                        'data-id': ownerState.itemId,
+                        style: isHighlighted ? { color: 'yellow' } : undefined,
+                      } as any;
+                    },
                   }}
                   sx={{
                     flexGrow: 1, 
