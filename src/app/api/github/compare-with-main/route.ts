@@ -9,9 +9,23 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+interface TreeItem {
+  path: string;
+  sha: string;
+  mode: string;
+  type: string;
+}
+
+interface FileDifference {
+  filename: string;
+  status: 'added' | 'removed' | 'modified';
+  main_sha?: string;
+  branch_sha?: string;
+}
+
 /**
  * GET /api/github/compare-with-main?branch=<branch_name>
- * Compares a branch with main and returns the list of files that are different.
+ * Compares a branch with main by comparing tree blob SHAs to find actual current state differences.
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -21,33 +35,105 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Branch parameter is required' }, { status: 400 });
   }
 
-  const compareUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/compare/main...${encodeURIComponent(branch)}`;
-  
-  console.log(`[API /github/compare-with-main] Comparing branch '${branch}' with main.`);
-  console.log(`[API /github/compare-with-main] Requesting URL: ${compareUrl}`);
+  console.log(`[API /github/compare-with-main] Comparing tree state of branch '${branch}' with main.`);
 
   try {
-    const response = await axios.get(compareUrl, { headers: githubAuthHeaders });
-    
-    const diff_with_main = response.data.files?.map((file: any) => ({
-        filename: file.filename,
-        status: file.status,
-        additions: file.additions,
-        deletions: file.deletions,
-        changes: file.changes,
-        patch: file.patch,
-    }));
+    // Get main branch tree
+    const mainBranchResponse = await axios.get(
+      `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches/main`, 
+      { headers: githubAuthHeaders }
+    );
+    const mainCommitSha = mainBranchResponse.data.commit.sha;
 
-    console.log('[API /github/compare-with-main] diff_with_main:', diff_with_main);
-    
-    diff_with_main?.forEach((file: any) => {
-      if (file.changes > 0 && file.additions === 0) {
-        console.log(`[API /github/compare-with-main] DEBUG: File ${file.filename} has ${file.deletions} deletions, ${file.changes} changes, but 0 additions`);
-        console.log(`[API /github/compare-with-main] DEBUG: Patch content for ${file.filename}:`);
-        console.log(file.patch || 'No patch content available');
-        console.log(`[API /github/compare-with-main] DEBUG: End patch for ${file.filename}`);
-      }
+    // Get target branch tree
+    const branchResponse = await axios.get(
+      `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches/${encodeURIComponent(branch)}`, 
+      { headers: githubAuthHeaders }
+    );
+    const branchCommitSha = branchResponse.data.commit.sha;
+
+    console.log(`[API /github/compare-with-main] Main commit SHA: ${mainCommitSha}`);
+    console.log(`[API /github/compare-with-main] Branch commit SHA: ${branchCommitSha}`);
+
+    // Get recursive trees for both branches
+    const [mainTreeResponse, branchTreeResponse] = await Promise.all([
+      axios.get(
+        `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/trees/${mainCommitSha}?recursive=1`, 
+        { headers: githubAuthHeaders }
+      ),
+      axios.get(
+        `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/trees/${branchCommitSha}?recursive=1`, 
+        { headers: githubAuthHeaders }
+      )
+    ]);
+
+    const mainTree: TreeItem[] = mainTreeResponse.data.tree;
+    const branchTree: TreeItem[] = branchTreeResponse.data.tree;
+
+    console.log(`[API /github/compare-with-main] Main tree has ${mainTree.length} items`);
+    console.log(`[API /github/compare-with-main] Branch tree has ${branchTree.length} items`);
+
+    // Create maps for fast lookup
+    const mainFiles = new Map<string, TreeItem>();
+    const branchFiles = new Map<string, TreeItem>();
+
+    // Only include blob types (files), not trees (directories)
+    mainTree.filter(item => item.type === 'blob').forEach(item => {
+      mainFiles.set(item.path, item);
     });
+
+    branchTree.filter(item => item.type === 'blob').forEach(item => {
+      branchFiles.set(item.path, item);
+    });
+
+    const differences: FileDifference[] = [];
+
+    // Find all unique file paths
+    const allPaths = new Set([...mainFiles.keys(), ...branchFiles.keys()]);
+
+    for (const path of allPaths) {
+      const mainFile = mainFiles.get(path);
+      const branchFile = branchFiles.get(path);
+
+      if (!mainFile && branchFile) {
+        // File added in branch
+        differences.push({
+          filename: path,
+          status: 'added',
+          branch_sha: branchFile.sha
+        });
+      } else if (mainFile && !branchFile) {
+        // File removed in branch
+        differences.push({
+          filename: path,
+          status: 'removed',
+          main_sha: mainFile.sha
+        });
+      } else if (mainFile && branchFile && mainFile.sha !== branchFile.sha) {
+        // File modified in branch
+        differences.push({
+          filename: path,
+          status: 'modified',
+          main_sha: mainFile.sha,
+          branch_sha: branchFile.sha
+        });
+      }
+      // If mainFile.sha === branchFile.sha, files are identical - no difference
+    }
+
+    console.log(`[API /github/compare-with-main] Found ${differences.length} actual differences`);
+    console.log('[API /github/compare-with-main] differences:', differences);
+
+    // Convert to format compatible with existing UI
+    const diff_with_main = differences.map(diff => ({
+      filename: diff.filename,
+      status: diff.status,
+      additions: diff.status === 'added' ? 1 : 0, // Simplified - we don't have line-level data
+      deletions: diff.status === 'removed' ? 1 : 0,
+      changes: diff.status === 'modified' ? 1 : 0,
+      main_sha: diff.main_sha,
+      branch_sha: diff.branch_sha
+    }));
 
     return NextResponse.json({ diff_with_main });
   } catch (error: unknown) {
