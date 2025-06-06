@@ -1390,11 +1390,17 @@ export default function Drawer() {
                   onContextMenu={handleContextMenu}
                   slotProps={{
                     item: (ownerState) => {
+                      // Log EVERY item being processed
+                      console.log(`[Drawer] Processing item: ${ownerState.itemId}`);
+                      
                       // Find the node in treeData by id
                       const node = findNodeById(treeData, ownerState.itemId);
                       const isDirectlyHighlighted = highlightedFiles.has(ownerState.itemId);
                       const isFolderWithHighlightedContent = node && node.isFolder && folderContainsHighlightedFile(node);
                       const isHighlighted = isDirectlyHighlighted || isFolderWithHighlightedContent;
+                      
+                      // Log detailed info for EVERY item
+                      console.log(`[Drawer] Item ${ownerState.itemId}: type=${node?.type}, directly=${isDirectlyHighlighted}, folder=${isFolderWithHighlightedContent}, final=${isHighlighted}`);
                       
                       // Debug logging for highlighting decisions
                       if (isHighlighted) {
