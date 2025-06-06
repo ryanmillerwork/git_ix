@@ -54,6 +54,122 @@ export async function POST(request: Request) {
   const validationResult = await validateUser(username, password, target_branch);
   console.log(`[API /github/copy-files] User validation result for ${target_branch}:`, validationResult);
 
+  // --- Reusable Git Tree Copy Function ---
+  const performGitTreeCopy = async (
+    sourceBranch: string, 
+    targetBranch: string, 
+    filePaths: string[], 
+    commitUsername: string
+  ) => {
+    try {
+        // Helper to get branch commit info
+        const getBranchCommit = async (branchName: string) => {
+            const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/branches/${encodeURIComponent(branchName)}`;
+            const response = await axios.get(url, { headers: githubAuthHeaders });
+            return response.data.commit; // { sha, url }
+        };
+
+        // Helper to get commit tree sha
+        const getCommitTreeSha = async (commitSha: string) => {
+            const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/commits/${commitSha}`;
+            const response = await axios.get(url, { headers: githubAuthHeaders });
+            return response.data.tree.sha;
+        };
+
+        // Helper to get a full recursive tree
+        const getRecursiveTree = async (treeSha: string) => {
+            const url = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/trees/${treeSha}?recursive=1`;
+            const response = await axios.get(url, { headers: githubAuthHeaders });
+            if (response.data.truncated) {
+                console.warn(`[API /github/copy-files] Warning: Tree data for ${treeSha} was truncated. This might cause issues with very large repositories.`);
+            }
+            return response.data.tree as { path: string, mode: string, type: 'blob' | 'tree', sha: string, size?: number, url?: string }[];
+        };
+
+        // 1. Get branch info
+        console.log(`[API /github/copy-files][TreeCopy] Fetching branch info for ${sourceBranch} and ${targetBranch}...`);
+        const sourceCommit = await getBranchCommit(sourceBranch);
+        const targetCommit = await getBranchCommit(targetBranch);
+        const parentCommitSha = targetCommit.sha;
+
+        // 2. & 3. Get Source and Target Trees
+        console.log(`[API /github/copy-files][TreeCopy] Fetching source and target trees...`);
+        const sourceTreeSha = await getCommitTreeSha(sourceCommit.sha);
+        const targetTreeSha = await getCommitTreeSha(parentCommitSha);
+        
+        const sourceTree = await getRecursiveTree(sourceTreeSha);
+        const targetTree = await getRecursiveTree(targetTreeSha);
+
+        // 4. Construct a new tree definition
+        console.log(`[API /github/copy-files][TreeCopy] Constructing new tree definition...`);
+        const sourceFilesData = new Map<string, {path: string, mode: string, type: 'blob', sha: string}>();
+        for (const item of sourceTree) {
+            if (item.type === 'blob' && filePaths.includes(item.path)) {
+                sourceFilesData.set(item.path, { path: item.path, mode: item.mode, type: 'blob', sha: item.sha });
+            }
+        }
+
+        const foundPaths = new Set(sourceFilesData.keys());
+        
+        // Build the results array for the final response
+        const copyResults: { path: string; status: string; reason?: string }[] = [];
+        const targetFilePaths = new Set(targetTree.map(item => item.path));
+        filePaths.forEach((p: string) => {
+            if (foundPaths.has(p)) {
+                copyResults.push({ path: p, status: targetFilePaths.has(p) ? 'updated' : 'created' });
+            } else {
+                copyResults.push({ path: p, status: 'skipped', reason: 'File not found in source branch' });
+            }
+        });
+        
+        const someFilesCopied = foundPaths.size > 0;
+        if (!someFilesCopied) {
+            return { success: true, someFilesCopied: false, results: copyResults, newCommitSha: null, message: "No eligible files found to copy." };
+        }
+
+        const newTreeMap = new Map<string, {path: string, mode: string, type: string, sha: string | null}>();
+        for (const item of targetTree) {
+            newTreeMap.set(item.path, { path: item.path, mode: item.mode, type: item.type, sha: item.sha });
+        }
+        for (const [, data] of sourceFilesData.entries()) {
+            newTreeMap.set(data.path, data);
+        }
+        
+        // 5. Create the new tree object
+        const createTreeUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/trees`;
+        const createTreePayload = { tree: Array.from(newTreeMap.values()) };
+        const createTreeResp = await axios.post(createTreeUrl, createTreePayload, { headers: githubAuthHeaders });
+        const newTreeSha = createTreeResp.data.sha;
+
+        // 6. Create a new commit
+        const createCommitUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/commits`;
+        const commitMessage = `Copy ${foundPaths.size} file(s) from ${sourceBranch} [author: ${commitUsername}]`;
+        const createCommitPayload = { message: commitMessage, tree: newTreeSha, parents: [parentCommitSha] };
+        const createCommitResp = await axios.post(createCommitUrl, createCommitPayload, { headers: githubAuthHeaders });
+        const newCommitSha = createCommitResp.data.sha;
+
+        // 7. Update the target branch reference
+        const updateRefUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/git/refs/heads/${encodeURIComponent(targetBranch)}`;
+        await axios.patch(updateRefUrl, { sha: newCommitSha }, { headers: githubAuthHeaders });
+
+        return { success: true, someFilesCopied: true, results: copyResults, newCommitSha, message: "Copy successful." };
+
+    } catch (error: unknown) {
+        let message = 'Unexpected server error during Git tree copy process.';
+        if (axios.isAxiosError(error)) {
+            message = error.response?.data?.message || error.message;
+            if (error.response?.status === 404) {
+                message = `One of the branches (${sourceBranch} or ${targetBranch}) could not be found. ${message}`;
+            }
+            console.error(`[API /github/copy-files][TreeCopy] Axios error:`, error.response?.data || error.message);
+        } else if (error instanceof Error) {
+           message = error.message;
+           console.error('[API /github/copy-files][TreeCopy] Unexpected error:', error.message);
+        }
+        return { success: false, someFilesCopied: false, results: [], newCommitSha: null, message };
+    }
+  };
+
   // --- Main Branch PR Flow Logic ---
   if (target_branch === 'main' && !validationResult.valid) {
     console.log(`[API /github/copy-files] User lacks direct push permission to main. Attempting PR flow.`);
@@ -94,134 +210,18 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: `Failed to create temporary branch: ${err.response?.data?.message || err.message}` }, { status: 500 });
     }
 
-    // 4. Perform the file copy loop, targeting the TEMP BRANCH
-    const copyResults: { path: string; status: string; reason?: string; url?: string }[] = [];
-    let lastSuccessfulCommitShaOnTempBranch: string | null = null;
-    let prFlowCopySuccess = true; // Assume success until an error occurs
-    let prFlowSomeFilesCopied = false;
-
-    console.log(`[API /github/copy-files] Starting PR flow copy of ${paths.length} paths from ${source_branch} to ${tempBranchName}`);
-    for (const filePath of paths) {
-        const getUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(source_branch)}`;
-        let sourceContent: string | null = null;
-
-        // 4a. Get file content from source branch
-        try {
-            console.log(`[API /github/copy-files][PR Flow] Getting source file: ${filePath} from ${source_branch}`);
-            const getResp = await axios.get(getUrl, { headers: githubAuthHeaders });
-            if (getResp.data?.content && getResp.data?.encoding === 'base64') {
-                sourceContent = getResp.data.content;
-            } else {
-                copyResults.push({ path: filePath, status: 'skipped', reason: `Unsupported encoding: ${getResp.data?.encoding || 'unknown'} or missing content` });
-                console.warn(`[API /github/copy-files][PR Flow] Skipped ${filePath}: Unsupported encoding or missing content.`);
-                continue;
-            }
-        } catch (err: unknown) {
-            if (axios.isAxiosError(err)) {
-                if (err.response?.status === 404) {
-                    console.warn(`[API /github/copy-files][PR Flow] Skipped ${filePath}: File not found in source branch ${source_branch}.`);
-                    copyResults.push({ path: filePath, status: 'skipped', reason: 'File not found in source branch' });
-                } else {
-                    console.error(`[API /github/copy-files][PR Flow] Error fetching source file ${filePath}:`, err.response?.data || err.message);
-                    copyResults.push({ path: filePath, status: 'error', reason: `Error fetching source: ${err.response?.data?.message || err.message}` });
-                    prFlowCopySuccess = false;
-                }
-            } else if (err instanceof Error) {
-                console.error(`[API /github/copy-files][PR Flow] Error fetching source file ${filePath}:`, err.message);
-                copyResults.push({ path: filePath, status: 'error', reason: `Error fetching source: ${err.message}` });
-                prFlowCopySuccess = false;
-            } else {
-                console.error(`[API /github/copy-files][PR Flow] Unknown error fetching source file ${filePath}:`, err);
-                copyResults.push({ path: filePath, status: 'error', reason: 'Unknown error fetching source file.' });
-                prFlowCopySuccess = false;
-            }
-            continue; // Skip to next file on error
-        }
-
-        // 4b. Check if file exists in temp branch to get its SHA (for update)
-        let tempBranchSha: string | null = null;
-        try {
-            console.log(`[API /github/copy-files][PR Flow] Checking target file: ${filePath} on ${tempBranchName}`);
-            const checkUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(tempBranchName)}`;
-            const checkResp = await axios.get(checkUrl, { headers: githubAuthHeaders });
-            tempBranchSha = checkResp.data.sha;
-            console.log(`[API /github/copy-files][PR Flow] Target file ${filePath} exists on temp branch. SHA: ${tempBranchSha}`);
-        } catch (err: unknown) {
-             // A 404 error here is EXPECTED if the file doesn't exist on the temp branch yet.
-             // Only treat other errors as failures for this step.
-             if (axios.isAxiosError(err) && err.response?.status === 404) {
-                 console.log(`[API /github/copy-files][PR Flow] Target file ${filePath} does not exist on temp branch. Will create.`);
-                 // Do nothing, tempBranchSha remains null - proceed to PUT
-             } else { 
-                 // Handle actual errors during the check
-                 let checkErrorMsg = 'Unknown error checking target file on temp branch.';
-                 if (axios.isAxiosError(err)) {
-                     checkErrorMsg = `Error checking target on temp branch: ${err.response?.data?.message || err.message}`;
-                     console.error(`[API /github/copy-files][PR Flow] Axios error checking target file ${filePath} on temp branch:`, err.response?.data || err.message);
-                 } else if (err instanceof Error) {
-                     checkErrorMsg = `Error checking target on temp branch: ${err.message}`;
-                     console.error(`[API /github/copy-files][PR Flow] Error checking target file ${filePath} on temp branch:`, err.message);
-                 } else {
-                     console.error(`[API /github/copy-files][PR Flow] Unknown error checking target file ${filePath} on temp branch:`, err);
-                 }
-                 copyResults.push({ path: filePath, status: 'error', reason: checkErrorMsg });
-                 prFlowCopySuccess = false;
-                 continue; // Skip this file if the check fails for reasons other than 404
-             }
-        }
-
-        // 4c. Prepare payload and PUT file to temp branch
-        const putPayload = {
-            message: `Copy ${filePath} from ${source_branch} [via PR flow by ${username}]`,
-            content: sourceContent,
-            branch: tempBranchName,
-            ...(tempBranchSha ? { sha: tempBranchSha } : {}),
-        };
-
-        try {
-            console.log(`[API /github/copy-files][PR Flow] Putting file: ${filePath} to ${tempBranchName}`);
-            const putUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(filePath)}`;
-            const putResp = await axios.put(putUrl, putPayload, { headers: githubAuthHeaders });
-
-            lastSuccessfulCommitShaOnTempBranch = putResp.data?.commit?.sha;
-            prFlowSomeFilesCopied = true;
-
-            if (!lastSuccessfulCommitShaOnTempBranch) {
-                console.error('[API /github/copy-files][PR Flow] Missing commit SHA in PUT response for path:', filePath);
-                copyResults.push({ path: filePath, status: 'error', reason: 'Missing commit SHA in GitHub response after PUT to temp branch.' });
-                prFlowCopySuccess = false; // Treat missing SHA as an error
-            } else {
-                copyResults.push({
-                    path: filePath,
-                    status: tempBranchSha ? 'updated' : 'created',
-                    url: putResp.data?.content?.html_url,
-                });
-                console.log(`[API /github/copy-files][PR Flow] Successfully copied ${filePath} to ${tempBranchName}. Commit SHA: ${lastSuccessfulCommitShaOnTempBranch}`);
-            }
-        } catch (err: unknown) {
-            let message = 'Unknown error during file copy to temp branch.';
-             if (axios.isAxiosError(err)) {
-                 console.error(`[API /github/copy-files][PR Flow] Axios error putting file ${filePath} to temp branch:`, err.response?.data || err.message);
-                 message = `Failed PUT to temp branch: ${err.response?.data?.message || err.message}`;
-             } else if (err instanceof Error) {
-                 console.error(`[API /github/copy-files][PR Flow] Error putting file ${filePath} to temp branch:`, err.message);
-                 message = `Failed PUT to temp branch: ${err.message}`;
-             } else {
-                 console.error(`[API /github/copy-files][PR Flow] Unknown error putting file ${filePath} to temp branch:`, err);
-             }
-            copyResults.push({ path: filePath, status: 'error', reason: message });
-            prFlowCopySuccess = false; // Mark as failure
-        }
-    } // End loop over paths for PR flow
-    console.log('[API /github/copy-files][PR Flow] Finished processing paths.');
+    // 4. Perform the file copy to the TEMP BRANCH using Git Tree Manipulation
+    console.log(`[API /github/copy-files] Starting PR flow copy of ${paths.length} paths from ${source_branch} to ${tempBranchName} using Git tree manipulation.`);
+    
+    const copyOperationResult = await performGitTreeCopy(source_branch, tempBranchName, paths, username);
 
     // 5. Create a Pull Request if files were copied successfully
-    if (prFlowSomeFilesCopied && prFlowCopySuccess) { // Only proceed if copy had no errors and at least one file was processed
+    if (copyOperationResult.someFilesCopied && copyOperationResult.success) {
         try {
             const prUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls`;
             const prPayload = {
                 title: `Copy files from ${source_branch} to main by ${username}`,
-                body: `Automated PR to copy ${copyResults.filter(r => r.status === 'created' || r.status === 'updated').length} file(s) from branch '${source_branch}' to 'main'. Initiated by ${username}.\n\nCopied files:\n${copyResults.filter(r => r.status === 'created' || r.status === 'updated').map(r => `- ${r.path}`).join('\n')}\n\nSkipped files:\n${copyResults.filter(r => r.status === 'skipped').map(r => `- ${r.path} (${r.reason || 'unknown'})`).join('\n')}`,
+                body: `Automated PR to copy ${copyOperationResult.results.filter(r => r.status === 'created' || r.status === 'updated').length} file(s) from branch '${source_branch}' to 'main'. Initiated by ${username}.\n\nCopied files:\n${copyOperationResult.results.filter(r => r.status === 'created' || r.status === 'updated').map(r => `- ${r.path}`).join('\n')}\n\nSkipped files:\n${copyOperationResult.results.filter(r => r.status === 'skipped').map(r => `- ${r.path} (${r.reason || 'unknown'})`).join('\n')}`,
                 head: tempBranchName,
                 base: 'main'
             };
@@ -230,10 +230,10 @@ export async function POST(request: Request) {
             console.log(`[API /github/copy-files][PR Flow] Successfully created PR: ${prResp.data.html_url}`);
 
             return NextResponse.json({
-                success: true, // Overall PR flow succeeded
+                success: true,
                 message: `User lacks permission for direct push to main. Files copied to temporary branch '${tempBranchName}' and Pull Request created.`,
                 pullRequestUrl: prResp.data.html_url,
-                results: copyResults,
+                results: copyOperationResult.results,
             }, { status: 201 }); // 201 Created (for the PR)
 
         } catch (err: any) {
@@ -241,21 +241,24 @@ export async function POST(request: Request) {
             return NextResponse.json({
                 success: false,
                 message: `Files copied to temporary branch '${tempBranchName}', but failed to create Pull Request. Please create it manually or retry. Reason: ${err.response?.data?.message || err.message}`,
-                results: copyResults,
+                results: copyOperationResult.results,
                 tempBranch: tempBranchName
             }, { status: 500 });
         }
     } else {
          // Copy process failed or skipped all files
-         const failureReason = prFlowCopySuccess ? 'No files were eligible for copying (all skipped or source files missing).' : 'Errors occurred during file copy process to temporary branch.';
+         const failureReason = copyOperationResult.success 
+            ? 'No files were eligible for copying (all skipped or source files missing).' 
+            : `Errors occurred during file copy process to temporary branch: ${copyOperationResult.message}`;
+
          console.log(`[API /github/copy-files][PR Flow] Skipping PR creation. Reason: ${failureReason}`);
          // Consider cleaning up temp branch here if desired
          return NextResponse.json({
              success: false,
              message: `Copy operation failed. ${failureReason}`,
-             results: copyResults,
+             results: copyOperationResult.results,
              tempBranch: tempBranchName
-         }, { status: prFlowCopySuccess ? 400 : 500 }); // 400 if only skips, 500 if errors
+         }, { status: copyOperationResult.success ? 400 : 500 }); // 400 if only skips, 500 if errors
     }
     // End of PR flow logic
   } else if (!validationResult.valid) {
@@ -265,192 +268,63 @@ export async function POST(request: Request) {
   }
 
   // --- Direct Copy Logic (if target != main OR user has permission for main) ---
-  console.log(`[API /github/copy-files] Proceeding with direct copy to ${target_branch}.`);
+  console.log(`[API /github/copy-files] Proceeding with direct copy to ${target_branch} using Git tree manipulation.`);
 
-  const copyResults: { path: string; status: string; reason?: string; url?: string }[] = [];
-  let lastSuccessfulCommitSha: string | null = null; 
-  let overallSuccess = true; // Track if all copies succeeded without error status
-  let someFilesCopied = false; // Track if at least one file was actually copied/updated
-
-  console.log(`[API /github/copy-files][Direct] Starting copy of ${paths.length} paths from ${source_branch} to ${target_branch}`);
-
-  try {
-    for (const filePath of paths) {
-      const getUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(source_branch)}`;
-      let sourceContent: string | null = null;
-
-      // 1. Get file content from source branch
-      try {
-        console.log(`[API /github/copy-files][Direct] Getting source file: ${filePath} from ${source_branch}`);
-        const getResp = await axios.get(getUrl, { headers: githubAuthHeaders });
-        if (getResp.data?.content && getResp.data?.encoding === 'base64') {
-            sourceContent = getResp.data.content;
-        } else {
-            copyResults.push({ path: filePath, status: 'skipped', reason: `Unsupported encoding: ${getResp.data?.encoding || 'unknown'} or missing content` });
-            console.warn(`[API /github/copy-files][Direct] Skipped ${filePath}: Unsupported encoding or missing content.`);
-            continue;
-        }
-      } catch (err: unknown) {
-          if (axios.isAxiosError(err)) {
-              if (err.response?.status === 404) {
-                console.warn(`[API /github/copy-files][Direct] Skipped ${filePath}: File not found in source branch ${source_branch}.`);
-                copyResults.push({ path: filePath, status: 'skipped', reason: 'File not found in source branch' });
-              } else {
-                 console.error(`[API /github/copy-files][Direct] Error fetching source file ${filePath}:`, err.response?.data || err.message);
-                 copyResults.push({ path: filePath, status: 'error', reason: `Error fetching source: ${err.response?.data?.message || err.message}` });
-                 overallSuccess = false;
-              }
-          } else if (err instanceof Error) {
-             console.error(`[API /github/copy-files][Direct] Error fetching source file ${filePath}:`, err.message);
-             copyResults.push({ path: filePath, status: 'error', reason: `Error fetching source: ${err.message}` });
-             overallSuccess = false;
-          } else {
-             console.error(`[API /github/copy-files][Direct] Unknown error fetching source file ${filePath}:`, err);
-             copyResults.push({ path: filePath, status: 'error', reason: 'Unknown error fetching source file.' });
-             overallSuccess = false;
-          }
-          continue; // Skip to next file on error
-      }
-
-      // 2. Check if file exists in target branch to get its SHA (for update)
-      let targetSha: string | null = null;
-      try {
-         console.log(`[API /github/copy-files][Direct] Checking target file: ${filePath} on ${target_branch}`);
-         const checkUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(target_branch)}`;
-        const checkResp = await axios.get(checkUrl, { headers: githubAuthHeaders });
-        targetSha = checkResp.data.sha;
-         console.log(`[API /github/copy-files][Direct] Target file ${filePath} exists. SHA: ${targetSha}`);
-      } catch (err: unknown) {
-          if (axios.isAxiosError(err) && err.response?.status === 404) {
-              // This is the expected case: file does not exist on target branch.
-              console.log(`[API /github/copy-files][Direct] Target file ${filePath} does not exist on ${target_branch}. Will create.`);
-              // targetSha remains null, proceed to PUT for creation.
-          } else {
-              // Any other error during the target check is a problem.
-              let checkErrorMsg = 'Unknown error checking target file.';
-              if (axios.isAxiosError(err)) {
-                  checkErrorMsg = `Error checking target file ${filePath} on ${target_branch}: ${err.response?.data?.message || err.message}`;
-                  console.error(`[API /github/copy-files][Direct] Axios error checking target file:`, err.response?.data || err.message);
-              } else if (err instanceof Error) {
-                  checkErrorMsg = `Error checking target file ${filePath} on ${target_branch}: ${err.message}`;
-                  console.error(`[API /github/copy-files][Direct] Error checking target file:`, err.message);
-              } else {
-                  console.error(`[API /github/copy-files][Direct] Unknown error checking target file:`, err);
-              }
-              copyResults.push({ path: filePath, status: 'error', reason: checkErrorMsg });
-              overallSuccess = false;
-              continue; // Skip this file if the check fails for reasons other than 404
-          }
-      }
-
-      // 3. Prepare payload and PUT file to target branch
-      const putPayload = {
-        message: `Copy ${filePath} from ${source_branch} [author: ${username}]`, // Add author
-        content: sourceContent, // Already base64
-        branch: target_branch,
-        ...(targetSha ? { sha: targetSha } : {}), // Include SHA only if updating
-      };
-
-      try {
-        console.log(`[API /github/copy-files][Direct] Putting file: ${filePath} to ${target_branch}`);
-        const putUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${encodeURIComponent(filePath)}`;
-        const putResp = await axios.put(putUrl, putPayload, { headers: githubAuthHeaders });
-        
-        lastSuccessfulCommitSha = putResp.data?.commit?.sha; // Capture SHA of this commit
-        someFilesCopied = true; // Mark that at least one file operation succeeded
-
-        if (!lastSuccessfulCommitSha) {
-             console.error('[API /github/copy-files][Direct] Missing commit SHA in PUT response for path:', filePath);
-             copyResults.push({ path: filePath, status: 'error', reason: 'Missing commit SHA in GitHub response after PUT.' });
-             overallSuccess = false; // Treat missing SHA as an error
-        } else {
-            copyResults.push({
-                path: filePath,
-                status: targetSha ? 'updated' : 'created',
-                url: putResp.data?.content?.html_url,
-            });
-             console.log(`[API /github/copy-files][Direct] Successfully copied ${filePath}. Commit SHA: ${lastSuccessfulCommitSha}`);
-        }
-      } catch (err: unknown) {
-          let message = 'Unknown error during file copy.';
-          if (axios.isAxiosError(err)) {
-             console.error(`[API /github/copy-files][Direct] Axios error putting file ${filePath} to target branch:`, err.response?.data || err.message);
-             message = `Failed to update target: ${err.response?.data?.message || err.message}`;
-          } else if (err instanceof Error) {
-             console.error(`[API /github/copy-files][Direct] Error putting file ${filePath} to target branch:`, err.message);
-             message = `Failed to update target: ${err.message}`;
-          } else {
-             console.error(`[API /github/copy-files][Direct] Unknown error putting file ${filePath} to target branch:`, err);
-          }
-          copyResults.push({ path: filePath, status: 'error', reason: message });
-          overallSuccess = false; // Mark overall success as false if any error occurs
-      }
-    } // End loop over paths for direct copy
-
-    console.log('[API /github/copy-files][Direct] Finished processing paths.');
-
-    // --- Auto Tagging Logic (Only for Direct Copy) ---
-    let tagResult: { success: boolean; error?: string } = { success: false, error: 'Tagging skipped: No successful file copies resulted in a commit.' };
-    let finalMessage = 'File copy process completed.';
-    let finalStatus = 200;
-    let newTagName: string | null = null;
-
-    if (lastSuccessfulCommitSha && someFilesCopied) { // Only tag if something was actually copied/updated directly
-        console.log(`[API /github/copy-files][Direct] Attempting to tag last successful commit: ${lastSuccessfulCommitSha}`);
-        try {
-            const tagsUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/tags`;
-            const tagsResponse = await axios.get(tagsUrl, { headers: githubAuthHeaders }); 
-            const latestTag = getLatestSemanticTag(tagsResponse.data);
-            newTagName = incrementVersion(latestTag, 'patch'); // Force patch bump for copies
-            console.log(`[API /github/copy-files][Direct] Calculated next tag: ${newTagName}`);
-            if (newTagName) {
-                tagResult = await createTagReference(newTagName, lastSuccessfulCommitSha);
-            } else {
-                tagResult.error = 'Could not calculate new tag name.';
-            }
-        } catch (tagLookupError: unknown) {
-            let message = 'Error processing existing tags or creating new tag.';
-            if (tagLookupError instanceof Error) {
-               message = tagLookupError.message;
-            } else if (axios.isAxiosError(tagLookupError)) {
-               message = tagLookupError.response?.data?.message || tagLookupError.message || message;
-            }
-            console.error('[API /github/copy-files][Direct] Error during tag lookup/creation:', message);
-            tagResult.error = message;
-        }
-
-        if (tagResult.success) {
-             finalMessage = `Files copied successfully to ${target_branch}. New state tagged as ${newTagName}.`;
-             finalStatus = overallSuccess ? 200 : 207; // Use 207 if there were non-blocking errors earlier
-        } else {
-             finalMessage = `Files copied to ${target_branch} (with potential errors/skips), but failed to apply patch tag ${newTagName || ''}. Reason: ${tagResult.error}`;
-             finalStatus = 207; // Partial success
-        }
-    } else if (someFilesCopied) {
-        finalMessage = `File copy process to ${target_branch} completed, but automatic tagging was skipped.`;
-        finalStatus = overallSuccess ? 200 : 207;
-    } else {
-        finalMessage = `File copy process to ${target_branch} completed, but no files were successfully copied/updated.`;
-        finalStatus = overallSuccess ? 200 : (copyResults.some(r => r.status === 'error') ? 500 : 400); // 500 if errors, 400 if only skips
-    }
-    // --- End Auto Tagging Logic ---
-
-    console.log(`[API /github/copy-files][Direct] Responding with status: ${finalStatus}, Message: ${finalMessage}`);
-    return NextResponse.json({ 
-        success: overallSuccess && (someFilesCopied ? tagResult.success : true), // Success if copy+tag ok, or if no copy needed + overall ok
-        message: finalMessage,
-        results: copyResults,
-        ...(tagResult.error && { tagError: tagResult.error }),
-        ...(tagResult.success && { tag: newTagName })
-    }, { status: finalStatus });
-
-  } catch (error: unknown) {
-    // Catch unexpected errors during the direct copy loop setup or final response generation
-    let message = 'Unexpected server error during direct copy process.';
-    if (error instanceof Error) {
-       message = error.message;
-    }
-    console.error('[API /github/copy-files][Direct] Unexpected error:', message);
-    return NextResponse.json({ error: message }, { status: 500 });
+  const copyOperationResult = await performGitTreeCopy(source_branch, target_branch, paths, username);
+  
+  if (!copyOperationResult.success) {
+      return NextResponse.json({ success: false, error: copyOperationResult.message, results: copyOperationResult.results }, { status: 500 });
   }
+
+  // --- Auto Tagging Logic ---
+  let tagResult: { success: boolean; error?: string } = { success: false, error: 'Tagging skipped: No commit was created.' };
+  let finalMessage = copyOperationResult.message;
+  let finalStatus = 200;
+  let newTagName: string | null = null;
+  
+  if (copyOperationResult.newCommitSha && copyOperationResult.someFilesCopied) { 
+      console.log(`[API /github/copy-files][Direct] Attempting to tag new commit: ${copyOperationResult.newCommitSha}`);
+      try {
+          const tagsUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/tags`;
+          const tagsResponse = await axios.get(tagsUrl, { headers: githubAuthHeaders }); 
+          const latestTag = getLatestSemanticTag(tagsResponse.data);
+          newTagName = incrementVersion(latestTag, 'patch');
+          console.log(`[API /github/copy-files][Direct] Calculated next tag: ${newTagName}`);
+          if (newTagName) {
+              tagResult = await createTagReference(newTagName, copyOperationResult.newCommitSha);
+          } else {
+              tagResult.error = 'Could not calculate new tag name.';
+          }
+      } catch (tagLookupError: unknown) {
+          let message = 'Error processing existing tags or creating new tag.';
+          if (tagLookupError instanceof Error) {
+             message = tagLookupError.message;
+          } else if (axios.isAxiosError(tagLookupError)) {
+             message = tagLookupError.response?.data?.message || tagLookupError.message || message;
+          }
+          console.error('[API /github/copy-files][Direct] Error during tag lookup/creation:', message);
+          tagResult.error = message;
+      }
+
+      if (tagResult.success) {
+           finalMessage = `Files copied successfully to ${target_branch}. New state tagged as ${newTagName}.`;
+           finalStatus = 200;
+      } else {
+           finalMessage = `Files copied to ${target_branch}, but failed to apply patch tag ${newTagName || ''}. Reason: ${tagResult.error}`;
+           finalStatus = 207; // Partial success
+      }
+  } else if (!copyOperationResult.someFilesCopied) {
+      finalMessage = `File copy process to ${target_branch} completed, but no files were eligible for copying.`;
+      finalStatus = 200;
+      tagResult.success = true; // Mark as success because no action was needed.
+  }
+  
+  console.log(`[API /github/copy-files][Direct] Responding with status: ${finalStatus}, Message: ${finalMessage}`);
+  return NextResponse.json({ 
+      success: tagResult.success,
+      message: finalMessage,
+      results: copyOperationResult.results,
+      ...(tagResult.error && { tagError: tagResult.error }),
+      ...(tagResult.success && newTagName && { tag: newTagName })
+  }, { status: finalStatus });
 }
