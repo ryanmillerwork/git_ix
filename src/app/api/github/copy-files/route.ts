@@ -245,4 +245,118 @@ export async function POST(request: Request) {
     }
 
     // 4. Perform the file copy to the TEMP BRANCH using Git Tree Manipulation
-    console.log(`
+    const copyOperationResult = await performGitTreeCopy(source_branch, tempBranchName, paths, username);
+
+    // 5. Create a Pull Request if files were copied successfully
+    if (copyOperationResult.someFilesCopied && copyOperationResult.success) {
+        try {
+            const prUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls`;
+            const prPayload = {
+                title: `Copy files from ${source_branch} to main by ${username}`,
+                body: `Automated PR to copy ${copyOperationResult.results.filter(r => r.status === 'copied').length} file(s) from branch '${source_branch}' to 'main'. Initiated by ${username}.\n\nCopied files:\n${copyOperationResult.results.filter(r => r.status === 'copied').map(r => `- ${r.path}`).join('\n')}\n\nSkipped files:\n${copyOperationResult.results.filter(r => r.status === 'skipped').map(r => `- ${r.path} (${r.reason || 'unknown'})`).join('\n')}`,
+                head: tempBranchName,
+                base: 'main'
+            };
+            console.log(`[API /github/copy-files][PR Flow] Creating PR from ${tempBranchName} to main.`);
+            const prResp = await axios.post(prUrl, prPayload, { headers: githubAuthHeaders });
+            console.log(`[API /github/copy-files][PR Flow] Successfully created PR: ${prResp.data.html_url}`);
+
+            return NextResponse.json({
+                success: true,
+                message: `User lacks permission for direct push to main. Files copied to temporary branch '${tempBranchName}' and Pull Request created.`,
+                pullRequestUrl: prResp.data.html_url,
+                results: copyOperationResult.results,
+            }, { status: 201 }); // 201 Created (for the PR)
+
+        } catch (err: any) {
+            console.error(`[API /github/copy-files][PR Flow] Error creating Pull Request from ${tempBranchName} to main:`, err.response?.data || err.message);
+            return NextResponse.json({
+                success: false,
+                message: `Files copied to temporary branch '${tempBranchName}', but failed to create Pull Request. Please create it manually or retry. Reason: ${err.response?.data?.message || err.message}`,
+                results: copyOperationResult.results,
+                tempBranch: tempBranchName
+            }, { status: 500 });
+        }
+    } else {
+         // Copy process failed or skipped all files
+         const failureReason = copyOperationResult.success 
+            ? 'No files were eligible for copying (all skipped or source files missing).' 
+            : `Errors occurred during file copy process to temporary branch: ${copyOperationResult.message}`;
+
+         console.log(`[API /github/copy-files][PR Flow] Skipping PR creation. Reason: ${failureReason}`);
+         // Consider cleaning up temp branch here if desired
+         return NextResponse.json({
+             success: false,
+             message: `Copy operation failed. ${failureReason}`,
+             results: copyOperationResult.results,
+             tempBranch: tempBranchName
+         }, { status: copyOperationResult.success ? 400 : 500 }); // 400 if only skips, 500 if errors
+    }
+    // End of PR flow logic
+  } else if (!validationResult.valid) {
+    // Original permission failure for a branch OTHER than main
+    console.log(`[API /github/copy-files] User validation failed for non-main target branch ${target_branch}: ${validationResult.reason}`);
+    return NextResponse.json({ error: validationResult.reason }, { status: 403 });
+  }
+
+  // --- Direct Copy Logic (if target != main OR user has permission for main) ---
+  console.log(`[API /github/copy-files] Proceeding with direct copy to ${target_branch} using Git tree manipulation.`);
+
+  const copyOperationResult = await performGitTreeCopy(source_branch, target_branch, paths, username);
+  
+  if (!copyOperationResult.success) {
+      return NextResponse.json({ success: false, error: copyOperationResult.message, results: copyOperationResult.results }, { status: 500 });
+  }
+
+  // --- Auto Tagging Logic ---
+  let tagResult: { success: boolean; error?: string } = { success: false, error: 'Tagging skipped: No commit was created.' };
+  let finalMessage = copyOperationResult.message;
+  let finalStatus = 200;
+  let newTagName: string | null = null;
+  
+  if (copyOperationResult.newCommitSha && copyOperationResult.someFilesCopied) { 
+      console.log(`[API /github/copy-files][Direct] Attempting to tag new commit: ${copyOperationResult.newCommitSha}`);
+      try {
+          const tagsUrl = `${GITHUB_API_BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/tags`;
+          const tagsResponse = await axios.get(tagsUrl, { headers: githubAuthHeaders }); 
+          const latestTag = getLatestSemanticTag(tagsResponse.data);
+          newTagName = incrementVersion(latestTag, 'patch');
+          console.log(`[API /github/copy-files][Direct] Calculated next tag: ${newTagName}`);
+          if (newTagName) {
+              tagResult = await createTagReference(newTagName, copyOperationResult.newCommitSha);
+          } else {
+              tagResult.error = 'Could not calculate new tag name.';
+          }
+      } catch (tagLookupError: unknown) {
+          let message = 'Error processing existing tags or creating new tag.';
+          if (tagLookupError instanceof Error) {
+             message = tagLookupError.message;
+          } else if (axios.isAxiosError(tagLookupError)) {
+             message = tagLookupError.response?.data?.message || tagLookupError.message || message;
+          }
+          console.error('[API /github/copy-files][Direct] Error during tag lookup/creation:', message);
+          tagResult.error = message;
+      }
+
+      if (tagResult.success) {
+           finalMessage = `Files copied successfully to ${target_branch}. New state tagged as ${newTagName}.`;
+           finalStatus = 200;
+      } else {
+           finalMessage = `Files copied to ${target_branch}, but failed to apply patch tag ${newTagName || ''}. Reason: ${tagResult.error}`;
+           finalStatus = 207; // Partial success
+      }
+  } else if (!copyOperationResult.someFilesCopied) {
+      finalMessage = `File copy process to ${target_branch} completed, but no files were eligible for copying.`;
+      finalStatus = 200;
+      tagResult.success = true; // Mark as success because no action was needed.
+  }
+  
+  console.log(`[API /github/copy-files][Direct] Responding with status: ${finalStatus}, Message: ${finalMessage}`);
+  return NextResponse.json({ 
+      success: tagResult.success,
+      message: finalMessage,
+      results: copyOperationResult.results,
+      ...(tagResult.error && { tagError: tagResult.error }),
+      ...(tagResult.success && newTagName && { tag: newTagName })
+  }, { status: finalStatus });
+}
