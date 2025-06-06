@@ -292,6 +292,7 @@ export default function Drawer() {
     addFile = async (p: string, f: string) => console.warn('[CONTEXT MISSING] addFile called:', p, f),
     addFolder = async (p: string, f: string) => console.warn('[CONTEXT MISSING] addFolder called:', p, f),
     diffWithMain,
+    refreshDiffWithMain,
   } = context;
 
   // Build a Set of changed file paths for fast lookup (any status)
@@ -802,6 +803,7 @@ export default function Drawer() {
           setCreateItemSnackbar({ open: true, message: response.data.message || `File '${newItemName}' created successfully.`, severity: 'success' });
           handleCloseNewItemModal();
           await fetchTreeData(selectedBranch); // Refresh tree on success
+          await refreshDiffWithMain(); // Refresh diff highlighting
         } else {
           // Handle cases where API returns success=false or specific errors (like tagging failure in 207)
           const message = response.data.message || `Failed to create file '${newItemName}'. ${response.data.tagError || ''}`;
@@ -836,6 +838,7 @@ export default function Drawer() {
             setCreateItemSnackbar({ open: true, message: response.data.message || `Folder '${newItemName}' created successfully.`, severity: 'success' });
             handleCloseNewItemModal();
             await fetchTreeData(selectedBranch); // Refresh tree on success
+            await refreshDiffWithMain(); // Refresh diff highlighting
           } else {
             // Handle API errors reported in the success=false response
             const message = response.data.message || `Failed to create folder '${newItemName}'.`;
@@ -899,6 +902,7 @@ export default function Drawer() {
         setDeleteSnackbar({ open: true, message: response.data.message || `${deleteItemType === 'file' ? 'File' : 'Folder'} deleted successfully.`, severity: 'success' });
         handleCloseDeleteModal(); // Close modal on success
         await fetchTreeData(selectedBranch); // Refresh tree data
+        await refreshDiffWithMain(); // Refresh diff highlighting
       } else {
         // Handle API errors reported in success=false response (though usually caught in catch block)
         const message = response.data.message || `Failed to delete ${deleteItemType}.`;
@@ -990,6 +994,7 @@ export default function Drawer() {
         });
         handleCloseIntraBranchCopyModal(); // Close modal on success
         await fetchTreeData(selectedBranch); // Refresh tree data
+        await refreshDiffWithMain(); // Refresh diff highlighting
       } else {
         // Handle unexpected success=false cases
          throw new Error(response.data.message || `Copy operation failed with status ${response.status}`);
@@ -1070,6 +1075,7 @@ export default function Drawer() {
             severity: response.status === 207 ? 'warning' : 'success' 
         });
         await fetchTreeData(selectedBranch); // Refresh tree
+        await refreshDiffWithMain(); // Refresh diff highlighting
         handleCloseRenameModal(); // Close modal
       } else {
          // Handle unexpected success=false cases
@@ -1246,6 +1252,7 @@ export default function Drawer() {
           if (response.status === 200 || response.status === 207) {
               console.log("Upload finished, refreshing tree data...");
               fetchTreeData(selectedBranch); 
+              await refreshDiffWithMain(); // Refresh diff highlighting
           }
 
       } catch (err: any) {

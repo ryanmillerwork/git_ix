@@ -62,6 +62,7 @@ interface EditorContextType {
     checkBackendHealth: () => Promise<void>;
     addRetryAction: (id: string, action: () => Promise<void>) => void;
     diffWithMain: DiffEntry[] | null;
+    refreshDiffWithMain: () => Promise<void>;
 
     // Added for Drawer
     folderStructure: TreeNode[];
@@ -380,6 +381,12 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         runPendingActions();
     }, [backendStatus, pendingRetryActions]);
 
+    const refreshDiffWithMain = useCallback(async () => {
+        if (selectedBranch) {
+            await compareBranchWithMain(selectedBranch);
+        }
+    }, [selectedBranch, compareBranchWithMain]);
+
     const contextValue: EditorContextType = {
         currentFilePath,
         currentFileContent,
@@ -405,6 +412,7 @@ export const EditorProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         checkBackendHealth,
         addRetryAction,
         diffWithMain,
+        refreshDiffWithMain,
 
         // Drawer related
         folderStructure,

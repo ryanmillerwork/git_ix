@@ -84,6 +84,7 @@ export default function Home() {
     branches,
     backendStatus,
     checkBackendHealth,
+    refreshDiffWithMain,
   } = useEditorContext();
 
   // Dialog states
@@ -254,6 +255,8 @@ export default function Home() {
          updateHasUnsavedChanges(false);
          // Reset version bump selection to default
          setVersionBumpType('patch'); 
+         // Refresh diff with main to show the new changes
+         await refreshDiffWithMain();
       } else {
          // Handle cases where API returns success: false or specific errors
          throw new Error(response.data.error || 'Save failed.');
