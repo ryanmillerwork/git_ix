@@ -1,4 +1,3 @@
-# /home/lab/git_ix/start_git_ix.sh
 #!/usr/bin/env bash
 SESSION=git_ix
 DIR="$HOME/git_ix"

@@ -485,7 +485,7 @@ export default function Home() {
       </Typography>
 
       {/* Ace Editor Area - Parent needs position: relative (already has it) */}
-      <Box sx={{ position: 'relative', flexGrow: 1, overflow: 'hidden' }}>
+      <Box sx={{ position: 'relative', flexGrow: 1 }}>
         {/* Editor itself */}
         <AceEditor
           mode={editorMode}
