@@ -188,7 +188,7 @@ npm run build
 To run the production server:
 
 ```bash
-npm start -- -p 3001
+npm start -- -H 0.0.0.0 -p 3001
 ```
 
 ## Frontend Code Organization
