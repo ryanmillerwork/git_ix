@@ -8,5 +8,5 @@ DIR="$HOME/git_ix"
 if ! tmux has-session -t "$SESSION" 2>/dev/null; then
   cd "$DIR" || exit 1
   # -l ensures bash loads your login env (needed if you rely on nvm, etc.)
-  tmux new-session  -d  -s "$SESSION"  "/bin/bash -c 'source \"$HOME/.nvm/nvm.sh\" && npm start -- -p 3001'"
+  tmux new-session  -d  -s "$SESSION"  "/bin/bash -c 'source \"$HOME/.nvm/nvm.sh\" && npm start -- -H 0.0.0.0 -p 3001'"
 fi
